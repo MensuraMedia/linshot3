@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+*.out
+*.lo
+*.la
+*.al
+*.gch
+*.pch
+
+# Build directories
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Python virtual environments
+venv/
+
+# Editor and OS files
+*~
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Other
+linshot
+screenshot_app 
