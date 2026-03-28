@@ -26,6 +26,7 @@ set(SOURCES
     src/editor_tools.c
     src/screenshot_history.c
     src/utils.c
+    src/crosshair_drawer.c
 )
 
 # Add header files
@@ -36,6 +37,7 @@ set(HEADERS
     include/editor_tools.h
     include/screenshot_history.h
     include/utils.h
+    include/crosshair_drawer.h
 )
 
 # Create executable
