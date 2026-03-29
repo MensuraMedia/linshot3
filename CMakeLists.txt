@@ -28,11 +28,13 @@ set(SOURCES
     src/utils.c
     src/crosshair_drawer.c
     src/sidebar_icons.c
+    src/keybinding_manager.c
 )
 
 # Add header files
 set(HEADERS
     include/main_window.h
+    include/keybinding_manager.h
     include/screen_capture.h
     include/capture_overlay.h
     include/editor_tools.h

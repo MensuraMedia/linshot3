@@ -3,6 +3,7 @@
 #include "../include/capture_overlay.h"
 #include "../include/editor_tools.h"
 #include "../include/sidebar_icons.h"
+#include "../include/keybinding_manager.h"
 #include "../include/utils.h"
 #include <glib.h>
 #include <stdlib.h>
@@ -50,6 +51,7 @@ typedef struct {
     double text_font_size;       // Text tool font size
     bool text_font_bold;         // Text tool bold
     bool text_font_italic;       // Text tool italic
+    DesktopEnv detected_de;      // Detected desktop environment
     bool tool_shadow[6];         // Shadow enabled: [0]=arrow, [1]=box, [2]=circle, [3]=text, [4]=line, [5]=border
     double tool_shadow_intensity[6]; // Shadow intensity 0.0-1.0
     int blur_block_size;         // Pixelate block size (4-32)
@@ -59,7 +61,6 @@ typedef struct {
 static char* get_binary_path(void);
 static void toggle_autostart(bool enable);
 static void toggle_default_screenshot_app(bool enable);
-static bool is_desktop_env(const char* name);
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win);
 static void on_history_selection_changed(GtkFlowBox* flow_box, gpointer data);
 static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* child, gpointer data);
@@ -2672,6 +2673,14 @@ static void create_settings_page(MainWindow* win, GtkWidget* notebook) {
     gtk_container_add(GTK_CONTAINER(startup_frame), startup_box);
     gtk_box_pack_start(GTK_BOX(vbox), startup_frame, FALSE, FALSE, 0);
 
+    // Desktop environment detection label
+    char de_info[128];
+    snprintf(de_info, sizeof(de_info), "Desktop: %s", desktop_env_name(settings->detected_de));
+    GtkWidget* de_label = gtk_label_new(de_info);
+    gtk_widget_set_halign(de_label, GTK_ALIGN_START);
+    gtk_widget_set_opacity(de_label, 0.6);
+    gtk_box_pack_start(GTK_BOX(vbox), de_label, FALSE, FALSE, 2);
+
     // Shortcut Key Frame
     GtkWidget* shortcut_frame = gtk_frame_new("Shortcut Key");
     GtkWidget* shortcut_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
@@ -3486,34 +3495,25 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
 }
 
 static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
-    GdkDisplay* display = gdk_display_get_default();
-    GdkScreen* screen = gdk_display_get_default_screen(display);
-    GdkWindow* root = gdk_screen_get_root_window(screen);
-    
-    // First ungrab any existing shortcuts
-    GdkSeat* seat = gdk_display_get_default_seat(display);
-    gdk_seat_ungrab(seat);
-    
-    // Register the new shortcut
-    switch (key) {
-        case SHORTCUT_PRINTSCREEN:
-            gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-            break;
-        case SHORTCUT_CTRL_PRINTSCREEN:
-            gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-            break;
-        case SHORTCUT_SHIFT_PRINTSCREEN:
-            gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-            break;
-        case SHORTCUT_CTRL_SHIFT_S:
-            gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-            break;
-        case SHORTCUT_CTRL_ALT_S:
-            gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-            break;
-        default:
-            break;
+    Settings* settings = safe_get_data(win->window, "settings", "register_shortcut_key");
+    if (!settings) return;
+
+    // Get the binary path
+    char* binary_path = get_binary_path();
+
+    // Unregister old, register new via DE-native method
+    keybinding_unregister(settings->detected_de);
+    keybinding_register(settings->detected_de, (KeyBinding)key, binary_path);
+
+    // For X11 fallback (DE_UNKNOWN, DE_KDE): also install GDK event filter
+    if (settings->detected_de == DE_UNKNOWN || settings->detected_de == DE_KDE) {
+        GdkDisplay* display = gdk_display_get_default();
+        GdkScreen* screen = gdk_display_get_default_screen(display);
+        GdkWindow* root = gdk_screen_get_root_window(screen);
+        gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
     }
+
+    g_free(binary_path);
 }
 
 static void destroy_widget(gpointer data, gpointer user_data) {
@@ -3581,36 +3581,9 @@ static void on_settings_changed(GtkWidget* widget, gpointer data) {
             int new_shortcut = GPOINTER_TO_INT(shortcut_data);
             if (settings->shortcut_key != (ShortcutKey)new_shortcut) {
                 settings->shortcut_key = (ShortcutKey)new_shortcut;
+                // Apply immediately via DE-native keybinding manager
                 register_shortcut_key(win, settings->shortcut_key);
                 grab_printscreen_key(win, settings->shortcut_key);
-
-                // Update Cinnamon/GNOME custom keybinding if set as default app
-                if (settings->default_screenshot_app) {
-                    const char* binding = NULL;
-                    switch (settings->shortcut_key) {
-                        case SHORTCUT_PRINTSCREEN:      binding = "Print"; break;
-                        case SHORTCUT_CTRL_PRINTSCREEN:  binding = "<Control>Print"; break;
-                        case SHORTCUT_SHIFT_PRINTSCREEN: binding = "<Shift>Print"; break;
-                        case SHORTCUT_CTRL_SHIFT_S:      binding = "<Control><Shift>s"; break;
-                        case SHORTCUT_CTRL_ALT_S:        binding = "<Control><Alt>s"; break;
-                        default: break;
-                    }
-                    if (binding) {
-                        char* cmd;
-                        if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
-                            cmd = g_strdup_printf(
-                                "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['%s']\"",
-                                binding);
-                        } else {
-                            cmd = g_strdup_printf(
-                                "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
-                                "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
-                                "binding '%s' 2>/dev/null", binding);
-                        }
-                        run_cmd(cmd);
-                        g_free(cmd);
-                    }
-                }
             }
         }
     }
@@ -3659,12 +3632,6 @@ static char* get_binary_path(void) {
     return g_strdup("linshot");
 }
 
-static bool is_desktop_env(const char* name) {
-    const char* desktop = g_getenv("XDG_CURRENT_DESKTOP");
-    if (!desktop) return false;
-    return (g_strstr_len(desktop, -1, name) != NULL);
-}
-
 static void toggle_default_screenshot_app(bool enable) {
     char* apps_dir = g_build_filename(g_get_user_data_dir(), "applications", NULL);
     char* desktop_file = g_build_filename(apps_dir, "linshot.desktop", NULL);
@@ -3677,7 +3644,7 @@ static void toggle_default_screenshot_app(bool enable) {
         FILE* file = fopen(desktop_file, "w");
         if (file) {
             fprintf(file, "[Desktop Entry]\n");
-            fprintf(file, "Version=1.2\n");
+            fprintf(file, "Version=1.4\n");
             fprintf(file, "Type=Application\n");
             fprintf(file, "Name=LinShot\n");
             fprintf(file, "GenericName=Screenshot Tool\n");
@@ -3693,95 +3660,19 @@ static void toggle_default_screenshot_app(bool enable) {
         }
 
         char* update_cmd = g_strdup_printf("update-desktop-database %s 2>/dev/null", apps_dir);
-        run_cmd(update_cmd);
+        if (system(update_cmd) == -1) { /* ignored */ }
         g_free(update_cmd);
-
-        if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
-            // Cinnamon (Linux Mint): disable built-in screenshot keys
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot '[]'");
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot-clip '[]'");
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot '[]'");
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip '[]'");
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot '[]'");
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]'");
-
-            // Register LinShot via Cinnamon custom keybinding
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list \"['linshot']\"");
-
-            char* cmd;
-            cmd = g_strdup_printf(
-                "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/name \"'LinShot Screenshot'\"");
-            run_cmd(cmd); g_free(cmd);
-
-            cmd = g_strdup_printf(
-                "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/command \"'%s --capture'\"", binary_path);
-            run_cmd(cmd); g_free(cmd);
-
-            run_cmd(
-                "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['Print']\"");
-
-        } else {
-            // GNOME / Ubuntu / other GTK-based DEs
-            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot '[]' 2>/dev/null");
-            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot-clip '[]' 2>/dev/null");
-            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys window-screenshot '[]' 2>/dev/null");
-            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys area-screenshot '[]' 2>/dev/null");
-            run_cmd("gsettings set org.gnome.shell.keybindings screenshot '[]' 2>/dev/null");
-            run_cmd("gsettings set org.gnome.shell.keybindings show-screenshot-ui '[]' 2>/dev/null");
-
-            char* binding_cmd = g_strdup_printf(
-                "gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "
-                "\"['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/']\" 2>/dev/null");
-            run_cmd(binding_cmd); g_free(binding_cmd);
-
-            char* name_cmd = g_strdup_printf(
-                "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
-                "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
-                "name 'LinShot Screenshot' 2>/dev/null");
-            run_cmd(name_cmd); g_free(name_cmd);
-
-            char* exec_cmd = g_strdup_printf(
-                "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
-                "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
-                "command '%s --capture' 2>/dev/null", binary_path);
-            run_cmd(exec_cmd); g_free(exec_cmd);
-
-            run_cmd(
-                "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
-                "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
-                "binding 'Print' 2>/dev/null");
-        }
 
     } else {
-        // Remove desktop file
+        // Remove desktop file and unregister keybinding
         g_unlink(desktop_file);
         char* update_cmd = g_strdup_printf("update-desktop-database %s 2>/dev/null", apps_dir);
-        run_cmd(update_cmd);
+        if (system(update_cmd) == -1) { /* ignored */ }
         g_free(update_cmd);
 
-        if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
-            // Restore Cinnamon defaults
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot-clip");
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot");
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip");
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
-            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip");
-
-            // Remove custom keybinding
-            run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list '[]'");
-            run_cmd("dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/");
-
-        } else {
-            // Restore GNOME defaults
-            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot 2>/dev/null");
-            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot-clip 2>/dev/null");
-            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys window-screenshot 2>/dev/null");
-            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys area-screenshot 2>/dev/null");
-            run_cmd("gsettings reset org.gnome.shell.keybindings screenshot 2>/dev/null");
-            run_cmd("gsettings reset org.gnome.shell.keybindings show-screenshot-ui 2>/dev/null");
-            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings '[]' 2>/dev/null");
-        }
+        // Unregister via the DE-native method
+        DesktopEnv de = detect_desktop_environment();
+        keybinding_unregister(de);
     }
 
     g_free(binary_path);
@@ -4108,6 +3999,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     Settings* settings = g_new0(Settings, 1);
     load_settings(settings);
     safe_set_data_full(win->window, "settings", settings, g_free, "main_window_init");
+
+    // Detect desktop environment
+    settings->detected_de = detect_desktop_environment();
 
     // Reload history with the configured screenshot path
     if (settings->screenshot_path) {
