@@ -1872,6 +1872,8 @@ static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow*
     // Create thumbnail — no event_box so flow box receives clicks directly
     GtkWidget* image = gtk_image_new_from_pixbuf(entry->thumbnail);
     gtk_widget_set_size_request(image, 200, 200);
+    gtk_widget_set_halign(image, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(image, GTK_ALIGN_CENTER);
 
     // Store filepath directly on the image widget
     safe_set_data_full(image, "filepath", g_strdup(entry->filepath), g_free, "create_history_item_widget");
@@ -1927,7 +1929,34 @@ static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
     }
     g_list_free(selected);
 
-    // Disable delete button after deletion
+    // Reload history from disk so deleted files are removed from the data structure
+    screenshot_history_load(&win->screenshot_history);
+
+    // Rebuild the flow box from the reloaded history
+    GList* children = gtk_container_get_children(GTK_CONTAINER(win->history_flow_box));
+    for (GList* iter = children; iter; iter = iter->next) {
+        gtk_widget_destroy(GTK_WIDGET(iter->data));
+    }
+    g_list_free(children);
+
+    GList* entries = screenshot_history_get_sorted(&win->screenshot_history);
+    for (GList* iter = entries; iter; iter = iter->next) {
+        ScreenshotEntry* entry = (ScreenshotEntry*)iter->data;
+        GtkWidget* item_widget = create_history_item_widget(entry, win);
+        gtk_flow_box_insert(GTK_FLOW_BOX(win->history_flow_box), item_widget, -1);
+    }
+    gtk_widget_show_all(win->history_flow_box);
+
+    // Update count label
+    GtkWidget* cnt_lbl = safe_get_data(win->window, "history-count-label", "on_delete_selected_clicked");
+    if (cnt_lbl && GTK_IS_LABEL(cnt_lbl)) {
+        int remaining = g_list_length(entries);
+        char cnt_msg[32];
+        snprintf(cnt_msg, sizeof(cnt_msg), "%d image%s", remaining, remaining != 1 ? "s" : "");
+        gtk_label_set_text(GTK_LABEL(cnt_lbl), cnt_msg);
+    }
+
+    // Disable delete button
     update_delete_btn_sensitivity(win);
 
     snprintf(msg, sizeof(msg), "%d screenshot%s deleted", deleted, deleted > 1 ? "s" : "");
@@ -3530,9 +3559,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "scale trough { background-color: #444444; min-height: 4px; border-radius: 2px; }"
         "scale highlight { background-color: #e0e0e0; min-height: 4px; border-radius: 2px; }"
         "combobox { font-size: 12px; }"
-        "flowboxchild { border: 3px solid transparent; border-radius: 4px; padding: 2px; }"
-        "flowboxchild:selected { border: 3px solid #5599ff; background-color: rgba(85,153,255,0.25); }"
-        "flowboxchild:selected image { opacity: 0.7; }"
+        "flowboxchild { border: 2px solid transparent; border-radius: 4px; padding: 2px; }"
+        "flowboxchild:selected { border: 2px solid #5599ff; background-color: rgba(85,153,255,0.2); }"
+        "flowboxchild:selected image { opacity: 0.75; }"
         "separator { background-color: #555555; }",
         -1, NULL);
     
@@ -3734,7 +3763,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create flow box for history thumbnails
     GtkWidget* flow_box = gtk_flow_box_new();
     gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow_box), GTK_SELECTION_MULTIPLE);
-    gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow_box), TRUE);
+    gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow_box), FALSE);
     gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(flow_box), 2);
     gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow_box), 5);
     gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow_box), 5);
