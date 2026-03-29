@@ -1,6 +1,6 @@
 # LinShot
 
-LinShot is a modern, open-source screenshot tool built for Linux Debian-based systems. Capture screenshots with real-time area selection, annotate with a full suite of drawing tools, and manage your screenshot history — all from a clean, dark-themed interface.
+LinShot is a modern, open-source screenshot tool built for Linux Debian-based systems. Capture screenshots with real-time area selection, annotate with a full suite of drawing tools, and browse your image files — all from a clean, dark-themed interface.
 
 **Status:** Beta — actively in development with continual updates.
 **Created:** January 2025
@@ -29,9 +29,18 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Area Capture** — Click and drag overlay with visual feedback, crosshair cursor, and live dimension display
 - **Multi-Paste** — Ctrl+V pastes images as movable overlays; paste multiple times for independent overlays
 - **Flatten** — Commit all overlays and annotations permanently into the image
-- **Screenshot History** — Thumbnail grid of all captured screenshots
+- **Ctrl+Scroll Zoom** — Zoom in/out on the screenshot editor (10%-1000%)
+- **Multi-Format Support** — Opens and edits PNG, JPG, JPEG, BMP, GIF, WebP, TIFF files
 - **Auto Clipboard** — Every capture is automatically copied to clipboard and saved
-- **Sequential Save** — Save dialog defaults to original filename with _1, _2, _3 suffix
+- **Sequential Save** — Save dialog defaults to configured path with _1, _2, _3 suffix
+
+### Files Tab
+- **Image Browser** — Displays all image files from the configured screenshot folder
+- **Auto-Refresh** — Detects new files when switching to the Files tab
+- **Multi-Select** — Click to select, Ctrl+Click to toggle, Shift+Click for range
+- **Delete** — Delete key or Delete button removes selected files from disk (with confirmation)
+- **Double-Click** — Opens any image in the screenshot editor for annotation
+- **Format Support** — Displays PNG, JPG, JPEG, BMP, GIF, WebP, TIFF thumbnails
 
 ### Application
 - **Dark Theme** — Consistent dark UI across sidebar, tabs, and all settings
@@ -39,15 +48,15 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Configurable Hotkey** — Set as default screenshot app with PrintScreen remapping
 - **Single Instance** — Lock file prevents duplicate launches, signals existing instance
 - **Persistent Settings** — All tool colors, widths, shadows, and text options saved between sessions
-- **5 Tabs** — Screenshot, History, Tools, Settings, About
+- **5 Tabs** — Screenshot, Files, Tools, Settings, About
 
 ## Screenshots
 
 ### Main View
 <img src="screenshots/Screenshot1.png" alt="Main View" width="800">
 
-### Screenshot History
-<img src="screenshots/Screenshot2.png" alt="Screenshot History" width="800">
+### Files Browser
+<img src="screenshots/Screenshot2.png" alt="Files Browser" width="800">
 
 ### Annotation Tools
 <img src="screenshots/Screenshot3.png" alt="Annotation Tools" width="800">
@@ -94,10 +103,11 @@ sudo apt remove linshot
 | Ctrl+V | Paste from clipboard as movable overlay (multi-paste supported) |
 | Ctrl+Z | Undo last annotation |
 | Ctrl+A | Select all and copy |
+| Ctrl+Scroll | Zoom in/out on screenshot editor |
 | Shift+Drag | Snap Line/Arrow to 45° angles |
 | Ctrl+Drag | Constrain Box/Circle/Select to square/circle |
-| Escape | Clear selection or discard all paste overlays |
-| Delete | Erase content inside selection |
+| Escape | Clear selection, discard pastes, or cancel capture |
+| Delete | Delete selected files (Files tab) or erase selection content |
 | PrintScreen | Capture (configurable in Settings) |
 
 ## Sidebar Tools

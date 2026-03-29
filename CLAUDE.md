@@ -74,7 +74,7 @@ All headers use `#ifndef MODULE_NAME_H` / `#define MODULE_NAME_H` / `#endif // M
 | `screen_capture.c` | Screenshot capture using GDK/X11 |
 | `capture_overlay.c` | Fullscreen overlay for area selection |
 | `editor_tools.c` | Annotation types, drawing logic (Cairo) |
-| `screenshot_history.c` | History gallery, thumbnail management |
+| `screenshot_history.c` | Files tab, thumbnail management, image discovery |
 | `sidebar_icons.c` | Sidebar icon rendering |
 | `crosshair_drawer.c` | Crosshair cursor for capture overlay |
 | `utils.c` | Shared utility functions |

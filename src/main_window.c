@@ -1874,12 +1874,21 @@ static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* ch
     const char* filepath = safe_get_data(inner, "filepath", "on_history_child_activated");
     if (!filepath) return;
 
-    // Load the image
-    cairo_surface_t* surface = cairo_image_surface_create_from_png(filepath);
-    if (!surface) {
+    // Load the image using GdkPixbuf (supports PNG, JPG, BMP, GIF, TIFF, WebP, etc.)
+    GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file(filepath, NULL);
+    if (!pixbuf) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Failed to load image");
         return;
     }
+
+    int img_w = gdk_pixbuf_get_width(pixbuf);
+    int img_h = gdk_pixbuf_get_height(pixbuf);
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, img_w, img_h);
+    cairo_t* load_cr = cairo_create(surface);
+    gdk_cairo_set_source_pixbuf(load_cr, pixbuf, 0, 0);
+    cairo_paint(load_cr);
+    cairo_destroy(load_cr);
+    g_object_unref(pixbuf);
 
     // Clean up existing image and annotations
     if (win_data->current_image) {
@@ -3760,7 +3769,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     
     // Create history page
     GtkWidget* history_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    GtkWidget* history_label = gtk_label_new("History");
+    GtkWidget* history_label = gtk_label_new("Files");
     gtk_widget_set_halign(history_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), history_page, history_label);
 
