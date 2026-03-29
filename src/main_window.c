@@ -3505,12 +3505,13 @@ static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
     keybinding_unregister(settings->detected_de);
     keybinding_register(settings->detected_de, (KeyBinding)key, binary_path);
 
-    // Always install GDK event filter on root window for X11 key grab
-    // This works alongside the DE-native binding as a reliable fallback
-    GdkDisplay* display = gdk_display_get_default();
-    GdkScreen* screen = gdk_display_get_default_screen(display);
-    GdkWindow* root = gdk_screen_get_root_window(screen);
-    gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
+    // Only install X11 event filter for DEs that use XGrabKey fallback
+    if (settings->detected_de == DE_UNKNOWN || settings->detected_de == DE_KDE) {
+        GdkDisplay* display = gdk_display_get_default();
+        GdkScreen* screen = gdk_display_get_default_screen(display);
+        GdkWindow* root = gdk_screen_get_root_window(screen);
+        gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
+    }
 
     g_free(binary_path);
 }
@@ -3864,14 +3865,24 @@ static gboolean on_capture_on_ready(gpointer data) {
 // --- X11 key grab for PrintScreen interception ---
 
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key) {
+    Settings* settings = safe_get_data(win->window, "settings", "grab_printscreen_key");
+
     Display* dpy = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
     Window root = DefaultRootWindow(dpy);
 
-    // Ungrab any previous grabs by LinShot
+    // Always ungrab any previous grabs by LinShot
     XUngrabKey(dpy, XKeysymToKeycode(dpy, XK_Print), AnyModifier, root);
     XUngrabKey(dpy, XKeysymToKeycode(dpy, XK_s), AnyModifier, root);
+    XFlush(dpy);
 
-    (void)win;
+    // For DEs with native keybinding support (Cinnamon, GNOME, XFCE, MATE),
+    // the DE handles the key via its own daemon + our wrapper/binding.
+    // XGrabKey would cause double-capture, so skip it.
+    if (settings && settings->detected_de != DE_UNKNOWN && settings->detected_de != DE_KDE) {
+        return;
+    }
+
+    // X11 fallback: grab the key directly (for unknown DEs and KDE)
     KeyCode kc;
     unsigned int mod = 0;
 
@@ -3900,7 +3911,6 @@ static void grab_printscreen_key(MainWindow* win, ShortcutKey key) {
             return;
     }
 
-    // Grab with all combinations of NumLock/CapsLock/ScrollLock
     unsigned int lock_masks[] = {0, Mod2Mask, LockMask, Mod5Mask,
                                   Mod2Mask | LockMask, Mod2Mask | Mod5Mask,
                                   LockMask | Mod5Mask, Mod2Mask | LockMask | Mod5Mask};
