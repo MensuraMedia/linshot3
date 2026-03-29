@@ -60,6 +60,8 @@ static GdkFilterReturn key_filter_func(GdkXEvent* xevent, GdkEvent* event, gpoin
 static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surface, GList* annotations, const char* filename);
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
+static void on_save_button_clicked(GtkWidget* widget, gpointer data);
+static void on_copy_button_clicked(GtkWidget* widget, gpointer data);
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key);
 
 // Preprocessing function to validate GTK objects
@@ -1019,14 +1021,80 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_key_press");
 
     if (event->state & GDK_CONTROL_MASK) {
-        if (event->keyval == GDK_KEY_z) {
-            undo_last_annotation(win_data);
+        switch (event->keyval) {
+            case GDK_KEY_z:  // Ctrl+Z: Undo
+                undo_last_annotation(win_data);
+                return TRUE;
+
+            case GDK_KEY_v:  // Ctrl+V: Paste
+                paste_from_clipboard(win, win_data);
+                return TRUE;
+
+            case GDK_KEY_c:  // Ctrl+C: Copy to clipboard
+                on_copy_button_clicked(NULL, win);
+                return TRUE;
+
+            case GDK_KEY_s:  // Ctrl+S: Save
+                on_save_button_clicked(NULL, win);
+                return TRUE;
+
+            case GDK_KEY_n:  // Ctrl+N: New capture
+                on_capture_button_clicked(NULL, win);
+                return TRUE;
+
+            case GDK_KEY_a:  // Ctrl+A: Select all (marquee entire image)
+                if (win_data->current_image) {
+                    int w = cairo_image_surface_get_width(win_data->current_image);
+                    int h = cairo_image_surface_get_height(win_data->current_image);
+                    win_data->has_marquee = true;
+                    win_data->marquee_bounds.x1 = 0;
+                    win_data->marquee_bounds.y1 = 0;
+                    win_data->marquee_bounds.x2 = w;
+                    win_data->marquee_bounds.y2 = h;
+                    // Copy entire image to clipboard
+                    copy_to_clipboard(win, win_data->current_image, win_data->annotations);
+                    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "All selected - copied to clipboard");
+                    gtk_widget_queue_draw(win->canvas);
+                }
+                return TRUE;
+
+            default:
+                break;
+        }
+    }
+
+    // Escape: clear marquee selection or deselect paste overlay
+    if (event->keyval == GDK_KEY_Escape) {
+        if (win_data->paste_overlay) {
+            cairo_surface_destroy(win_data->paste_overlay);
+            win_data->paste_overlay = NULL;
+            gtk_widget_queue_draw(win->canvas);
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste discarded");
             return TRUE;
         }
-        if (event->keyval == GDK_KEY_v) {
-            paste_from_clipboard(win, win_data);
+        if (win_data->has_marquee) {
+            win_data->has_marquee = false;
+            gtk_widget_queue_draw(win->canvas);
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Selection cleared");
             return TRUE;
         }
+    }
+
+    // Delete: remove selected region content
+    if (event->keyval == GDK_KEY_Delete && win_data->has_marquee && win_data->current_image) {
+        cairo_t* cr = cairo_create(win_data->current_image);
+        int x = win_data->marquee_bounds.x1;
+        int y = win_data->marquee_bounds.y1;
+        int w = win_data->marquee_bounds.x2 - x;
+        int h = win_data->marquee_bounds.y2 - y;
+        cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+        cairo_rectangle(cr, x, y, w, h);
+        cairo_fill(cr);
+        cairo_destroy(cr);
+        win_data->has_marquee = false;
+        gtk_widget_queue_draw(win->canvas);
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Selection deleted");
+        return TRUE;
     }
 
     return FALSE;
@@ -1486,7 +1554,89 @@ static void create_settings_page(MainWindow* win, GtkWidget* notebook) {
     gtk_box_pack_start(GTK_BOX(vbox), shortcut_frame, FALSE, FALSE, 0);
 
     // Add the vbox to the notebook
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, gtk_label_new("Settings"));
+    GtkWidget* settings_tab_label = gtk_label_new("Settings");
+    gtk_widget_set_halign(settings_tab_label, GTK_ALIGN_CENTER);
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, settings_tab_label);
+}
+
+static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider) {
+    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 15);
+    gtk_widget_set_margin_start(vbox, 30);
+    gtk_widget_set_margin_end(vbox, 30);
+    gtk_widget_set_margin_top(vbox, 30);
+    gtk_widget_set_margin_bottom(vbox, 30);
+    gtk_widget_set_valign(vbox, GTK_ALIGN_START);
+
+    // Apply dark background
+    GtkStyleContext* vbox_ctx = gtk_widget_get_style_context(vbox);
+    gtk_style_context_add_provider(vbox_ctx,
+        GTK_STYLE_PROVIDER(css_provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk_style_context_add_class(vbox_ctx, "content-area");
+
+    // App name
+    GtkWidget* title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title),
+        "<span size='xx-large' weight='bold' foreground='#e0e0e0'>LinShot</span>");
+    gtk_widget_set_halign(title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), title, FALSE, FALSE, 0);
+
+    // Version
+    GtkWidget* version = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(version),
+        "<span size='large' foreground='#aaaaaa'>Version 1.0.0 Beta</span>");
+    gtk_widget_set_halign(version, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), version, FALSE, FALSE, 0);
+
+    // Separator
+    GtkWidget* sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(vbox), sep, FALSE, FALSE, 5);
+
+    // Description
+    GtkWidget* desc = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(desc),
+        "<span foreground='#cccccc'>"
+        "LinShot is a modern, open-source screenshot tool built for Linux Debian-based systems.\n\n"
+        "Capture screenshots with real-time area selection, annotate with arrows, rectangles,\n"
+        "circles, text, and freehand drawing. Use the marquee tool to select and copy regions,\n"
+        "paste images with drag-to-position, and manage your screenshot history.\n\n"
+        "Features include configurable keyboard shortcuts, system tray integration,\n"
+        "automatic clipboard copy, and sequential save naming."
+        "</span>");
+    gtk_label_set_line_wrap(GTK_LABEL(desc), TRUE);
+    gtk_widget_set_halign(desc, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), desc, FALSE, FALSE, 0);
+
+    // Details
+    GtkWidget* details = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(details),
+        "<span foreground='#999999'>"
+        "<b>Created:</b>  January 2025\n"
+        "<b>Status:</b>    Beta - undergoing continual updates and improvements\n"
+        "<b>License:</b>   Open Source (CC BY-NC 4.0)\n"
+        "<b>Platform:</b>  Linux (Debian, Ubuntu, Mint, and derivatives)\n"
+        "<b>Toolkit:</b>    GTK 3 + Cairo + X11\n"
+        "<b>Source:</b>    github.com/MensuraMedia/linshot"
+        "</span>");
+    gtk_label_set_line_wrap(GTK_LABEL(details), TRUE);
+    gtk_widget_set_halign(details, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), details, FALSE, FALSE, 10);
+
+    // Footer
+    GtkWidget* footer = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(footer),
+        "<span foreground='#666666' size='small'>"
+        "LinShot is currently in Beta and is undergoing continual updates.\n"
+        "Free for education, research, and personal projects.\n"
+        "Commercial use requires explicit permission."
+        "</span>");
+    gtk_widget_set_halign(footer, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), footer, FALSE, FALSE, 0);
+
+    // Add to notebook
+    GtkWidget* about_tab_label = gtk_label_new("About");
+    gtk_widget_set_halign(about_tab_label, GTK_ALIGN_CENTER);
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, about_tab_label);
 }
 
 static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
@@ -2135,13 +2285,43 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "button.sidebar-button:active, button.sidebar-button.active { background-color: #4d4d4d; }"
         "label.footer { color: #888888; font-size: 13px; padding: 10px 8px 10px 15px; }"
         "box.content-area { background-color: #2d2d2d; }"
-        "drawing-area { background-color: #2d2d2d; }",
+        "drawing-area { background-color: #2d2d2d; }"
+        "notebook { background-color: #2d2d2d; }"
+        "notebook header { background-color: #252525; padding: 0; }"
+        "notebook tab {"
+        "   padding: 10px 20px;"
+        "   min-height: 20px;"
+        "   background-color: #252525;"
+        "   border-right: 1px solid #444444;"
+        "   border-bottom: 1px solid #444444;"
+        "}"
+        "notebook tab:checked {"
+        "   background-color: #2d2d2d;"
+        "   border-bottom: 2px solid #e0e0e0;"
+        "}"
+        "notebook tab:hover:not(:checked) {"
+        "   background-color: #333333;"
+        "}"
+        "notebook tab label {"
+        "   color: #ffffff;"
+        "   font-size: 13px;"
+        "}"
+        "notebook > stack { background-color: #2d2d2d; }"
+        "frame { color: #cccccc; }"
+        "frame > border { border-color: #555555; }"
+        "frame > label { color: #cccccc; }"
+        "radiobutton label, checkbutton label { color: #cccccc; font-size: 13px; }"
+        "entry { background-color: #3d3d3d; color: #e0e0e0; border-color: #555555; }"
+        "separator { background-color: #555555; }",
         -1, NULL);
     
-    GtkStyleContext* sidebar_context = gtk_widget_get_style_context(sidebar_container);
-    gtk_style_context_add_provider(sidebar_context,
+    // Apply CSS globally so it covers all tabs and widgets
+    GdkScreen* screen = gdk_screen_get_default();
+    gtk_style_context_add_provider_for_screen(screen,
         GTK_STYLE_PROVIDER(css_provider),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    GtkStyleContext* sidebar_context = gtk_widget_get_style_context(sidebar_container);
     gtk_style_context_add_class(sidebar_context, "sidebar");
     
     // Create buttons container
@@ -2151,7 +2331,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create buttons with icons and labels
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "Shot", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
+        "LinShot", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
     };
     // Button type: 't'=tool, 'a'=action
     // For tools, store the ToolType enum value
@@ -2213,7 +2393,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     }
     
     // Add footer label
-    GtkWidget* footer_label = gtk_label_new("SilverMax");
+    GtkWidget* footer_label = gtk_label_new("Mensura Media");
     gtk_widget_set_halign(footer_label, GTK_ALIGN_CENTER);
     gtk_widget_set_hexpand(footer_label, TRUE);
     GtkStyleContext* footer_context = gtk_widget_get_style_context(footer_label);
@@ -2240,10 +2420,17 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create notebook for tabs
     GtkWidget* notebook = gtk_notebook_new();
     gtk_box_pack_start(GTK_BOX(content_area), notebook, TRUE, TRUE, 0);
-    
+
+    // Apply tab styling
+    GtkStyleContext* nb_context = gtk_widget_get_style_context(notebook);
+    gtk_style_context_add_provider(nb_context,
+        GTK_STYLE_PROVIDER(css_provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
     // Create current screenshot page
     GtkWidget* screenshot_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     GtkWidget* screenshot_label = gtk_label_new("Screenshot");
+    gtk_widget_set_halign(screenshot_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), screenshot_page, screenshot_label);
     
     // Create scrolled window for the canvas
@@ -2282,6 +2469,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create history page
     GtkWidget* history_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     GtkWidget* history_label = gtk_label_new("History");
+    gtk_widget_set_halign(history_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), history_page, history_label);
     
     // Create scrolled window for history
@@ -2321,7 +2509,10 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     
     // Create settings tab
     create_settings_page(win, notebook);
-    
+
+    // Create about tab
+    create_about_page(notebook, css_provider);
+
     // Set up system tray icon and enable minimize-to-tray
     setup_tray_icon(win);
     win->minimize_to_tray = true;

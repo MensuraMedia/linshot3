@@ -13,25 +13,19 @@ static double S(double val) {
 // Save icon uses SET 2 design (download arrow into tray)
 
 static void draw_shot(cairo_t* cr, double x, double y) {
+    // LinShot app icon: circle with inner dot
     double lw = SIDEBAR_ICON_STROKE;
     cairo_set_line_width(cr, lw);
-    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
-    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
 
-    // Camera body
-    cairo_rectangle(cr, x+S(2), y+S(5), S(16), S(12));
+    // Outer circle
+    double cx = x + S(10);
+    double cy = y + S(10);
+    cairo_arc(cr, cx, cy, S(7), 0, 2 * 3.14159265);
     cairo_stroke(cr);
 
-    // Lens circle
-    cairo_arc(cr, x+S(10), y+S(11), S(3.5), 0, 2*M_PI);
-    cairo_stroke(cr);
-
-    // Flash bump
-    cairo_move_to(cr, x+S(7), y+S(5));
-    cairo_line_to(cr, x+S(8), y+S(2));
-    cairo_line_to(cr, x+S(12), y+S(2));
-    cairo_line_to(cr, x+S(13), y+S(5));
-    cairo_stroke(cr);
+    // Inner dot
+    cairo_arc(cr, cx, cy, S(2), 0, 2 * 3.14159265);
+    cairo_fill(cr);
 }
 
 static void draw_arrow(cairo_t* cr, double x, double y) {
