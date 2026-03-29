@@ -55,43 +55,54 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
     switch (annotation->type) {
         case TOOL_ARROW:
             {
-                // Calculate arrow direction
+                // Bold arrow: narrow shaft with rounded tail, solid triangular head
                 double dx = annotation->bounds.x2 - annotation->bounds.x1;
                 double dy = annotation->bounds.y2 - annotation->bounds.y1;
                 double angle = atan2(dy, dx);
                 double length = sqrt(dx * dx + dy * dy);
-                
-                // Draw arrow shaft with 3pt width
-                cairo_set_line_width(cr, 3.0);
-                cairo_move_to(cr, annotation->bounds.x1, annotation->bounds.y1);
-                cairo_line_to(cr, annotation->bounds.x2 - 12.0 * cos(angle), annotation->bounds.y2 - 12.0 * sin(angle));
-                cairo_stroke(cr);
-                
-                // Draw arrow head
-                // Make arrow head size proportional to shaft length, but with min/max limits
-                double arrow_length = fmin(fmax(length * 0.15, 12.0), 20.0);  // 15% of shaft length, between 12-20px
-                double arrow_width = arrow_length * 0.8;  // Width is 80% of length for good proportions
-                
-                // Calculate arrow head points
+                if (length < 2.0) break;
+
+                // Proportional sizing
+                double shaft_half = fmin(fmax(length * 0.02, 1.5), 3.5);
+                double head_length = fmin(fmax(length * 0.25, 14.0), 30.0);
+                double head_half = head_length * 0.55;
+
+                double sin_a = sin(angle);
+                double cos_a = cos(angle);
+
+                // Tip of the arrow
                 double tip_x = annotation->bounds.x2;
                 double tip_y = annotation->bounds.y2;
-                double back_x = tip_x - arrow_length * cos(angle);
-                double back_y = tip_y - arrow_length * sin(angle);
-                
-                // Points for the base of the arrow head
-                double left_x = back_x - (arrow_width * 0.5) * sin(angle);
-                double left_y = back_y + (arrow_width * 0.5) * cos(angle);
-                double right_x = back_x + (arrow_width * 0.5) * sin(angle);
-                double right_y = back_y - (arrow_width * 0.5) * cos(angle);
-                
-                // Draw solid arrow head with slightly thicker outline
-                cairo_set_line_width(cr, 1.0);
-                cairo_move_to(cr, tip_x, tip_y);
-                cairo_line_to(cr, left_x, left_y);
-                cairo_line_to(cr, right_x, right_y);
+
+                // Where the head meets the shaft
+                double neck_x = tip_x - head_length * cos_a;
+                double neck_y = tip_y - head_length * sin_a;
+
+                // Shaft start (tail)
+                double tail_x = annotation->bounds.x1;
+                double tail_y = annotation->bounds.y1;
+
+                // Perpendicular offsets
+                double sx = sin_a * shaft_half;
+                double sy = cos_a * shaft_half;
+                double hx = sin_a * head_half;
+                double hy = cos_a * head_half;
+
+                // Draw shaft with rounded back end
+                cairo_move_to(cr, neck_x - sx, neck_y + sy);       // neck left
+                cairo_line_to(cr, tail_x - sx, tail_y + sy);       // tail left
+                // Rounded tail cap
+                cairo_arc(cr, tail_x, tail_y, shaft_half, angle + M_PI/2, angle - M_PI/2);
+                cairo_line_to(cr, neck_x + sx, neck_y - sy);       // neck right
                 cairo_close_path(cr);
-                cairo_fill_preserve(cr);
-                cairo_stroke(cr);
+                cairo_fill(cr);
+
+                // Draw triangular head
+                cairo_move_to(cr, neck_x - hx, neck_y + hy);       // head left wing
+                cairo_line_to(cr, tip_x, tip_y);                    // tip
+                cairo_line_to(cr, neck_x + hx, neck_y - hy);       // head right wing
+                cairo_close_path(cr);
+                cairo_fill(cr);
             }
             break;
             

@@ -496,17 +496,66 @@ static void on_capture_button_clicked(GtkWidget* widget, gpointer data) {
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Screenshot saved and copied to clipboard");
 }
 
+static void copy_marquee_region(MainWindow* win, MainWindowData* win_data) {
+    int x = win_data->marquee_bounds.x1;
+    int y = win_data->marquee_bounds.y1;
+    int w = win_data->marquee_bounds.x2 - x;
+    int h = win_data->marquee_bounds.y2 - y;
+    int img_w = cairo_image_surface_get_width(win_data->current_image);
+    int img_h = cairo_image_surface_get_height(win_data->current_image);
+
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > img_w) w = img_w - x;
+    if (y + h > img_h) h = img_h - y;
+    if (w < 1 || h < 1) return;
+
+    cairo_surface_t* region = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t* rcr = cairo_create(region);
+
+    cairo_set_source_surface(rcr, win_data->current_image, -x, -y);
+    cairo_paint(rcr);
+
+    for (GList* iter = win_data->annotations; iter; iter = iter->next) {
+        cairo_save(rcr);
+        cairo_translate(rcr, -x, -y);
+        annotation_draw((Annotation*)iter->data, rcr);
+        cairo_restore(rcr);
+    }
+
+    cairo_surface_flush(region);
+
+    GdkPixbuf* pb = gdk_pixbuf_get_from_surface(region, 0, 0, w, h);
+    if (pb) {
+        GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+        gtk_clipboard_set_image(clipboard, pb);
+        g_object_unref(pb);
+    }
+
+    cairo_destroy(rcr);
+    cairo_surface_destroy(region);
+
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Selection %dx%d copied to clipboard", w, h);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+}
+
 static void on_copy_button_clicked(GtkWidget* widget, gpointer data) {
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_copy_button_clicked");
-    
+
     if (!win_data->current_image) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image to copy");
         return;
     }
-    
-    copy_to_clipboard(win, win_data->current_image, win_data->annotations);
+
+    // If marquee selection is active, copy only the selected region
+    if (win_data->has_marquee) {
+        copy_marquee_region(win, win_data);
+    } else {
+        copy_to_clipboard(win, win_data->current_image, win_data->annotations);
+    }
 }
 
 static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
@@ -793,6 +842,19 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     } else if (win_data->drawing) {
         win_data->start_point.x2 = event->x;
         win_data->start_point.y2 = event->y;
+
+        // Ctrl held: constrain to equal ratio (square/circle)
+        if ((event->state & GDK_CONTROL_MASK) &&
+            (win_data->current_tool.type == TOOL_RECTANGLE ||
+             win_data->current_tool.type == TOOL_ELLIPSE ||
+             win_data->current_tool.type == TOOL_MARQUEE)) {
+            int dx = win_data->start_point.x2 - win_data->start_point.x1;
+            int dy = win_data->start_point.y2 - win_data->start_point.y1;
+            int size = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+            win_data->start_point.x2 = win_data->start_point.x1 + (dx >= 0 ? size : -size);
+            win_data->start_point.y2 = win_data->start_point.y1 + (dy >= 0 ? size : -size);
+        }
+
         gtk_widget_queue_draw(win->canvas);
     }
     
@@ -1439,6 +1501,8 @@ static void create_settings_page(MainWindow* win, GtkWidget* notebook) {
     gtk_container_set_border_width(GTK_CONTAINER(path_box), 10);
     
     GtkWidget* path_entry = gtk_entry_new();
+    gtk_widget_set_can_focus(path_entry, TRUE);
+    gtk_widget_set_can_default(path_entry, FALSE);
     gtk_entry_set_text(GTK_ENTRY(path_entry), settings->screenshot_path);
     safe_set_data(path_entry, "settings", settings, "create_settings_page");
     safe_set_data(path_entry, "window", win, "create_settings_page");
@@ -2523,6 +2587,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
 
     // Show all widgets
     gtk_widget_show_all(win->window);
+
+    // Set focus to the canvas so the path entry doesn't auto-focus
+    gtk_widget_grab_focus(win->canvas);
 
     // Schedule auto-capture if --capture flag was set
     g_idle_add(on_capture_on_ready, win);
