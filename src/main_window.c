@@ -72,6 +72,7 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
+static void update_image_info(MainWindow* win, MainWindowData* win_data, const char* filepath);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
 static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
@@ -622,8 +623,8 @@ static void on_capture_button_clicked(GtkWidget* widget, gpointer data) {
     // Redraw canvas
     gtk_widget_queue_draw(win->canvas);
 
+    update_image_info(win, win_data, filename);
     g_free(filename);
-    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Screenshot saved and copied to clipboard");
 }
 
 static void copy_marquee_region(MainWindow* win, MainWindowData* win_data) {
@@ -1289,6 +1290,31 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data) {
     }
 }
 
+static void update_image_info(MainWindow* win, MainWindowData* win_data, const char* filepath) {
+    if (!win_data->current_image) return;
+
+    int w = cairo_image_surface_get_width(win_data->current_image);
+    int h = cairo_image_surface_get_height(win_data->current_image);
+
+    char size_str[32] = "";
+    if (filepath) {
+        struct stat st;
+        if (stat(filepath, &st) == 0) {
+            if (st.st_size >= 1048576) {
+                snprintf(size_str, sizeof(size_str), "  %.1fMB", (double)st.st_size / 1048576.0);
+            } else if (st.st_size >= 1024) {
+                snprintf(size_str, sizeof(size_str), "  %.0fKB", (double)st.st_size / 1024.0);
+            } else {
+                snprintf(size_str, sizeof(size_str), "  %ldB", (long)st.st_size);
+            }
+        }
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%dx%d%s", w, h, size_str);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+}
+
 static void paste_overlay_free(PasteOverlay* overlay) {
     if (!overlay) return;
     if (overlay->surface) cairo_surface_destroy(overlay->surface);
@@ -1912,7 +1938,7 @@ static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* ch
     }
 
     gtk_widget_queue_draw(win->canvas);
-    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Loaded image from history");
+    update_image_info(win, win_data, filepath);
 }
 
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win) {
@@ -3578,12 +3604,17 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "   padding: 10px 20px;"
         "   min-height: 20px;"
         "   background-color: #252525;"
-        "   border-right: 1px solid #444444;"
-        "   border-bottom: 1px solid #444444;"
+        "   border: none;"
+        "   border-radius: 0;"
+        "   outline: none;"
+        "   box-shadow: none;"
+        "   border-right: 1px solid #3a3a3a;"
         "}"
         "notebook tab:checked {"
         "   background-color: #2d2d2d;"
+        "   border: none;"
         "   border-bottom: 2px solid #e0e0e0;"
+        "   border-right: 1px solid #3a3a3a;"
         "}"
         "notebook tab:hover:not(:checked) {"
         "   background-color: #333333;"
