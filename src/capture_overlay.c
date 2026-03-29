@@ -93,9 +93,22 @@ bool capture_overlay_init(CaptureOverlay* overlay) {
     gtk_window_move(GTK_WINDOW(overlay->window), geometry.x, geometry.y);
     gtk_window_resize(GTK_WINDOW(overlay->window), geometry.width, geometry.height);
     
+    // Ensure we receive key events
+    gtk_widget_add_events(overlay->window, GDK_KEY_PRESS_MASK);
+    gtk_widget_set_can_focus(overlay->window, TRUE);
+
     // Show window
     gtk_widget_show_all(overlay->window);
-    
+
+    // Grab keyboard so ESC works on popup windows
+    GdkWindow* gdk_win = gtk_widget_get_window(overlay->window);
+    if (gdk_win) {
+        GdkSeat* seat = gdk_display_get_default_seat(gdk_display_get_default());
+        gdk_seat_grab(seat, gdk_win,
+                      GDK_SEAT_CAPABILITY_KEYBOARD,
+                      TRUE, NULL, NULL, NULL, NULL);
+    }
+
     // Capture the background after window is shown but before it's drawn
     while (gtk_events_pending()) {
         gtk_main_iteration();
@@ -118,11 +131,15 @@ CaptureArea capture_overlay_get_selection(CaptureOverlay* overlay) {
 }
 
 void capture_overlay_cleanup(CaptureOverlay* overlay) {
+    // Release keyboard grab
+    GdkSeat* seat = gdk_display_get_default_seat(gdk_display_get_default());
+    if (seat) gdk_seat_ungrab(seat);
+
     if (overlay->background) {
         cairo_surface_destroy(overlay->background);
         overlay->background = NULL;
     }
-    
+
     if (overlay->window) {
         gtk_widget_destroy(overlay->window);
         overlay->window = NULL;

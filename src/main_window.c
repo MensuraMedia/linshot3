@@ -1710,10 +1710,22 @@ static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gp
     (void)event;
     MainWindow* win = (MainWindow*)data;
 
-    // If delete mode is active, don't open — let flow box handle selection
+    // If delete mode is active, toggle selection on the flow box child
     GtkWidget* delete_check = safe_get_data(win->window, "delete-mode-check", "on_history_item_clicked");
     if (delete_check && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(delete_check))) {
-        return;  // Let GTK's flow box selection handle the click instead
+        // Find the parent GtkFlowBoxChild
+        GtkWidget* flow_child = gtk_widget_get_parent(widget);
+        if (flow_child && GTK_IS_FLOW_BOX_CHILD(flow_child)) {
+            GtkFlowBox* flow_box = GTK_FLOW_BOX(gtk_widget_get_parent(flow_child));
+            if (flow_box) {
+                if (gtk_flow_box_child_is_selected(GTK_FLOW_BOX_CHILD(flow_child))) {
+                    gtk_flow_box_unselect_child(flow_box, GTK_FLOW_BOX_CHILD(flow_child));
+                } else {
+                    gtk_flow_box_select_child(flow_box, GTK_FLOW_BOX_CHILD(flow_child));
+                }
+            }
+        }
+        return;
     }
 
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_history_item_clicked");
@@ -3429,6 +3441,8 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "scale trough { background-color: #444444; min-height: 4px; border-radius: 2px; }"
         "scale highlight { background-color: #e0e0e0; min-height: 4px; border-radius: 2px; }"
         "combobox { font-size: 12px; }"
+        "flowboxchild { border: 2px solid transparent; border-radius: 4px; }"
+        "flowboxchild:selected { border: 2px solid #5599ff; background-color: rgba(85,153,255,0.15); }"
         "separator { background-color: #555555; }",
         -1, NULL);
     
