@@ -26,13 +26,13 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 ## Screenshots
 
 ### Main View
-![Main View](screenshots/Screenshot1.png)
+![Main View](screenshots/Screenshot1.png?v=2)
 
 ### Screenshot History
-![Screenshot History](screenshots/Screenshot2.png)
+![Screenshot History](screenshots/Screenshot2.png?v=2)
 
 ### Annotation Tools
-![Annotation Tools](screenshots/Screenshot3.png)
+![Annotation Tools](screenshots/Screenshot3.png?v=2)
 
 ## Installation
 
