@@ -1371,20 +1371,6 @@ static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event
     GdkEventKey* key = (GdkEventKey*)event;
     MainWindow* win = (MainWindow*)data;
 
-    // Delete key: delete selected history images (no modifier needed)
-    if (key->keyval == GDK_KEY_Delete && win->history_flow_box) {
-        GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
-        if (selected) {
-            // Trigger the delete button click
-            GtkWidget* delete_btn = safe_get_data(win->window, "delete-btn", "key_filter_func_global");
-            if (delete_btn && gtk_widget_get_sensitive(delete_btn)) {
-                on_delete_selected_clicked(delete_btn, win);
-            }
-            g_list_free(selected);
-            return GDK_FILTER_REMOVE;
-        }
-    }
-
     if (!(key->state & GDK_CONTROL_MASK)) return GDK_FILTER_CONTINUE;
 
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "key_filter_func_global");
@@ -1481,6 +1467,16 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
             win_data->has_marquee = false;
             gtk_widget_queue_draw(win->canvas);
             gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Selection cleared");
+            return TRUE;
+        }
+    }
+
+    // Delete key: delete selected history images
+    if (event->keyval == GDK_KEY_Delete && win->history_flow_box) {
+        GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
+        if (selected) {
+            on_delete_selected_clicked(NULL, win);
+            g_list_free(selected);
             return TRUE;
         }
     }
@@ -3460,7 +3456,13 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     Settings* settings = g_new0(Settings, 1);
     load_settings(settings);
     safe_set_data_full(win->window, "settings", settings, g_free, "main_window_init");
-    
+
+    // Reload history with the configured screenshot path
+    if (settings->screenshot_path) {
+        screenshot_history_set_path(&win->screenshot_history, settings->screenshot_path);
+        screenshot_history_load(&win->screenshot_history);
+    }
+
     // Create main horizontal box
     GtkWidget* main_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_container_add(GTK_CONTAINER(win->window), main_hbox);
