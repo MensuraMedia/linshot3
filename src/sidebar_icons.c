@@ -300,6 +300,31 @@ static void draw_brightness(cairo_t* cr, double x, double y) {
     }
 }
 
+static void draw_duplicate(cairo_t* cr, double x, double y) {
+    // Two overlapping pages with a small + sign
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    // Back page
+    cairo_rectangle(cr, x+S(5), y+S(2), S(11), S(13));
+    cairo_stroke(cr);
+
+    // Front page (offset)
+    cairo_rectangle(cr, x+S(2), y+S(5), S(11), S(13));
+    cairo_stroke(cr);
+
+    // Small + sign on front page
+    cairo_set_line_width(cr, 1.5);
+    cairo_move_to(cr, x+S(7.5), y+S(9));
+    cairo_line_to(cr, x+S(7.5), y+S(15));
+    cairo_stroke(cr);
+    cairo_move_to(cr, x+S(4.5), y+S(12));
+    cairo_line_to(cr, x+S(10.5), y+S(12));
+    cairo_stroke(cr);
+}
+
 // Dispatch table
 typedef void (*IconDrawFunc)(cairo_t*, double, double);
 
@@ -319,6 +344,7 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_resize,
     draw_rotate,
     draw_brightness,
+    draw_duplicate,
     draw_save
 };
 

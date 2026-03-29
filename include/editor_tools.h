@@ -19,7 +19,8 @@ typedef enum {
     TOOL_CROP,
     TOOL_RESIZE,
     TOOL_ROTATE,
-    TOOL_BRIGHTNESS
+    TOOL_BRIGHTNESS,
+    TOOL_DUPLICATE
 } ToolType;
 
 // Font settings for text tool

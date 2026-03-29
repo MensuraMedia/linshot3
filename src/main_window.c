@@ -80,6 +80,7 @@ static void apply_crop(MainWindow* win, MainWindowData* win_data);
 static void show_resize_dialog(MainWindow* win, MainWindowData* win_data);
 static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data);
 static void show_brightness_dialog(MainWindow* win, MainWindowData* win_data);
+static void duplicate_current_image(MainWindow* win, MainWindowData* win_data);
 static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
@@ -760,7 +761,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         }
 
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur", "Crop", "Resize", "Rotate", "Brightness"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur", "Crop", "Resize", "Rotate", "Brightness", "Duplicate"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -1036,6 +1037,8 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
             show_rotate_dialog(win, win_data);
         } else if (win_data->current_tool.type == TOOL_BRIGHTNESS) {
             show_brightness_dialog(win, win_data);
+        } else if (win_data->current_tool.type == TOOL_DUPLICATE) {
+            duplicate_current_image(win, win_data);
         } else if (win_data->current_tool.type != TOOL_NONE) {
             win_data->selected_text = NULL;  // Deselect text when using other tools
             win_data->drawing = true;
@@ -1641,6 +1644,98 @@ static void show_brightness_dialog(MainWindow* win, MainWindowData* win_data) {
     }
 
     cairo_surface_destroy(original);
+}
+
+static void duplicate_current_image(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->current_image) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image to duplicate");
+        return;
+    }
+
+    Settings* settings = safe_get_data(win->window, "settings", "duplicate_current_image");
+    const char* save_dir = (settings && settings->screenshot_path) ?
+                           settings->screenshot_path :
+                           g_get_user_special_dir(G_USER_DIRECTORY_PICTURES);
+
+    // Determine base name from current filename or generate one
+    const char* base_name = win_data->current_filename;
+    char* generated = NULL;
+    if (!base_name) {
+        generated = generate_screenshot_filename(win);
+        base_name = generated;
+    }
+
+    // Get just the filename without directory
+    char* basename_only = g_path_get_basename(base_name);
+
+    // Split at last '.' to insert _N before extension
+    char* dot = strrchr(basename_only, '.');
+    char* name_prefix;
+    const char* ext;
+    if (dot) {
+        name_prefix = g_strndup(basename_only, (gsize)(dot - basename_only));
+        ext = dot;  // includes the dot
+    } else {
+        name_prefix = g_strdup(basename_only);
+        ext = ".png";
+    }
+
+    // Find next available number
+    int n = 1;
+    char* dest_path = NULL;
+    while (1) {
+        g_free(dest_path);
+        dest_path = g_strdup_printf("%s/%s_%d%s", save_dir, name_prefix, n, ext);
+        if (!g_file_test(dest_path, G_FILE_TEST_EXISTS)) break;
+        n++;
+        if (n > 9999) break;  // Safety limit
+    }
+
+    // Save the current image (with annotations baked in) as the duplicate
+    int w = cairo_image_surface_get_width(win_data->current_image);
+    int h = cairo_image_surface_get_height(win_data->current_image);
+    cairo_surface_t* combined = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t* cr = cairo_create(combined);
+    cairo_set_source_surface(cr, win_data->current_image, 0, 0);
+    cairo_paint(cr);
+    for (GList* iter = win_data->annotations; iter; iter = iter->next) {
+        annotation_draw((Annotation*)iter->data, cr);
+    }
+    cairo_destroy(cr);
+
+    // Save using GdkPixbuf
+    GdkPixbuf* pb = gdk_pixbuf_get_from_surface(combined, 0, 0, w, h);
+    cairo_surface_destroy(combined);
+    if (pb) {
+        const char* save_ext = ext + 1;  // skip the dot
+        const char* format = "png";
+        if (g_ascii_strcasecmp(save_ext, "jpg") == 0 || g_ascii_strcasecmp(save_ext, "jpeg") == 0)
+            format = "jpeg";
+        else if (g_ascii_strcasecmp(save_ext, "bmp") == 0)
+            format = "bmp";
+        else if (g_ascii_strcasecmp(save_ext, "tiff") == 0 || g_ascii_strcasecmp(save_ext, "tif") == 0)
+            format = "tiff";
+
+        GError* error = NULL;
+        if (gdk_pixbuf_save(pb, dest_path, format, &error, NULL)) {
+            char msg[256];
+            char* dest_base = g_path_get_basename(dest_path);
+            snprintf(msg, sizeof(msg), "Duplicated: %s", dest_base);
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+            g_free(dest_base);
+        } else {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Failed to duplicate: %s", error ? error->message : "unknown error");
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+            if (error) g_error_free(error);
+        }
+        g_object_unref(pb);
+    }
+
+    g_free(dest_path);
+    g_free(name_prefix);
+    g_free(basename_only);
+    g_free(generated);
 }
 
 static void undo_last_annotation(MainWindowData* win_data) {
@@ -4115,7 +4210,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
         "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy",
-        "Border", "Blur", "Crop", "Resize", "Rotate", "Bright", "Save"
+        "Border", "Blur", "Crop", "Resize", "Rotate", "Bright", "Dupe", "Save"
     };
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
@@ -4134,10 +4229,11 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         {'t', TOOL_RESIZE},     // 12: Resize
         {'t', TOOL_ROTATE},     // 13: Rotate
         {'t', TOOL_BRIGHTNESS}, // 14: Brightness
-        {'a', 3}                // 15: Save
+        {'t', TOOL_DUPLICATE},  // 15: Duplicate
+        {'a', 3}                // 16: Save
     };
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 17; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -4174,7 +4270,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
         } else if (i == 8) { // Copy
             g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 15) { // Save
+        } else if (i == 16) { // Save
             g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
