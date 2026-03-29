@@ -29,3 +29,7 @@
 | 2026-03-29T23:30:00-04:00 | feat: Text section layout — vertical flow with font preview (Sample Text + 0123456789), dynamic font/style updates |
 | 2026-03-29T23:45:00-04:00 | fix: Universal Setting checkbox — enables/disables controls, color changes now refresh all tool palettes |
 | 2026-03-29T23:50:00-04:00 | style: minimal spinbuttons (#ccc +/- chars), restored slider coloring, smaller color circles (18px) |
+| 2026-03-30T00:10:00-04:00 | fix: clipboard paste — add gtk_clipboard_store() to all copy paths for X11 persistence |
+| 2026-03-30T00:10:00-04:00 | fix: desktop file — update Exec path to linshot binary, add absolute icon path for menu |
+| 2026-03-30T00:10:00-04:00 | chore: bump version to 1.2.0 — About page, CMakeLists, desktop files |
+| 2026-03-30T00:10:00-04:00 | docs: update About page description with new tools (border, blur, multi-paste, shadows) |

@@ -446,6 +446,7 @@ static void copy_to_clipboard(MainWindow* win, cairo_surface_t* surface, GList* 
     // Create a copy of the pixbuf that will persist after we free our local resources
     GdkPixbuf* clipboard_pixbuf = gdk_pixbuf_copy(pixbuf);
     gtk_clipboard_set_image(clipboard, clipboard_pixbuf);
+    gtk_clipboard_store(clipboard);
     g_object_unref(clipboard_pixbuf);
     
     // Clean up
@@ -645,6 +646,7 @@ static void copy_marquee_region(MainWindow* win, MainWindowData* win_data) {
     if (pb) {
         GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
         gtk_clipboard_set_image(clipboard, pb);
+        gtk_clipboard_store(clipboard);
         g_object_unref(pb);
     }
 
@@ -1096,6 +1098,7 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
                         if (pb) {
                             GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
                             gtk_clipboard_set_image(clipboard, pb);
+                            gtk_clipboard_store(clipboard);
                             g_object_unref(pb);
                         }
 
@@ -1864,7 +1867,7 @@ static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider)
     // Version
     GtkWidget* version = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(version),
-        "<span size='large' foreground='#aaaaaa'>Version 1.0.0 Beta</span>");
+        "<span size='large' foreground='#aaaaaa'>Version 1.2.0 Beta</span>");
     gtk_widget_set_halign(version, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(vbox), version, FALSE, FALSE, 0);
 
@@ -1877,11 +1880,12 @@ static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider)
     gtk_label_set_markup(GTK_LABEL(desc),
         "<span foreground='#cccccc'>"
         "LinShot is a modern, open-source screenshot tool built for Linux Debian-based systems.\n\n"
-        "Capture screenshots with real-time area selection, annotate with arrows, rectangles,\n"
-        "circles, text, and freehand drawing. Use the marquee tool to select and copy regions,\n"
-        "paste images with drag-to-position, and manage your screenshot history.\n\n"
-        "Features include configurable keyboard shortcuts, system tray integration,\n"
-        "automatic clipboard copy, and sequential save naming."
+        "Capture screenshots with real-time area selection, annotate with lines, arrows,\n"
+        "rectangles, circles, text, borders, and freehand drawing. Blur regions to redact\n"
+        "sensitive content. Use the marquee tool to select and copy regions, paste multiple\n"
+        "images with drag-to-position, and flatten all changes into the image.\n\n"
+        "Per-tool color, width, and shadow settings with universal apply option.\n"
+        "Configurable keyboard shortcuts, system tray, and persistent settings."
         "</span>");
     gtk_label_set_line_wrap(GTK_LABEL(desc), TRUE);
     gtk_widget_set_halign(desc, GTK_ALIGN_START);
@@ -1896,7 +1900,7 @@ static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider)
         "<b>License:</b>   Open Source (CC BY-NC 4.0)\n"
         "<b>Platform:</b>  Linux (Debian, Ubuntu, Mint, and derivatives)\n"
         "<b>Toolkit:</b>    GTK 3 + Cairo + X11\n"
-        "<b>Source:</b>    github.com/MensuraMedia/linshot"
+        "<b>Source:</b>    github.com/MensuraMedia/linshot3"
         "</span>");
     gtk_label_set_line_wrap(GTK_LABEL(details), TRUE);
     gtk_widget_set_halign(details, GTK_ALIGN_START);
@@ -2726,15 +2730,18 @@ static void toggle_default_screenshot_app(bool enable) {
         FILE* file = fopen(desktop_file, "w");
         if (file) {
             fprintf(file, "[Desktop Entry]\n");
-            fprintf(file, "Version=1.0\n");
+            fprintf(file, "Version=1.2\n");
             fprintf(file, "Type=Application\n");
-            fprintf(file, "Name=LinShot Screenshot Tool\n");
+            fprintf(file, "Name=LinShot\n");
+            fprintf(file, "GenericName=Screenshot Tool\n");
             fprintf(file, "Comment=Capture, annotate, and share screenshots\n");
             fprintf(file, "Exec=%s\n", binary_path);
-            fprintf(file, "Icon=linshot\n");
+            fprintf(file, "Icon=%s/resources/icons/linshot-128.png\n", g_path_get_dirname(binary_path));
             fprintf(file, "Terminal=false\n");
-            fprintf(file, "Categories=Utility;Graphics;\n");
+            fprintf(file, "Categories=Utility;Graphics;GTK;\n");
+            fprintf(file, "Keywords=screenshot;capture;screen;snip;annotation;\n");
             fprintf(file, "MimeType=image/png;image/jpeg;\n");
+            fprintf(file, "StartupNotify=true\n");
             fclose(file);
         }
 

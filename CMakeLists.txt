@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(linshot VERSION 1.0.0 LANGUAGES C)
+project(linshot VERSION 1.2.0 LANGUAGES C)
 
 # Find required packages
 find_package(PkgConfig REQUIRED)
