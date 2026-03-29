@@ -71,7 +71,6 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
-static void on_delete_mode_toggled(GtkWidget* widget, gpointer data);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
 static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
@@ -1773,14 +1772,19 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
     cairo_surface_destroy(combined_surface);
 }
 
+static void update_delete_btn_sensitivity(MainWindow* win) {
+    GtkWidget* delete_btn = safe_get_data(win->window, "delete-btn", "update_delete_btn_sensitivity");
+    if (!delete_btn || !win->history_flow_box) return;
+    GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
+    gtk_widget_set_sensitive(delete_btn, selected != NULL);
+    g_list_free(selected);
+}
+
 static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
-    (void)event;
     MainWindow* win = (MainWindow*)data;
 
-    // If delete mode is active, toggle selection on the flow box child
-    GtkWidget* delete_check = safe_get_data(win->window, "delete-mode-check", "on_history_item_clicked");
-    if (delete_check && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(delete_check))) {
-        // Find the parent GtkFlowBoxChild
+    // Ctrl+Click: toggle selection for deletion
+    if (event->state & GDK_CONTROL_MASK) {
         GtkWidget* flow_child = gtk_widget_get_parent(widget);
         if (flow_child && GTK_IS_FLOW_BOX_CHILD(flow_child)) {
             GtkFlowBox* flow_box = GTK_FLOW_BOX(gtk_widget_get_parent(flow_child));
@@ -1790,6 +1794,7 @@ static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gp
                 } else {
                     gtk_flow_box_select_child(flow_box, GTK_FLOW_BOX_CHILD(flow_child));
                 }
+                update_delete_btn_sensitivity(win);
             }
         }
         return;
@@ -1846,24 +1851,7 @@ static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow*
 }
 
 // --- History deletion support ---
-
-static void on_delete_mode_toggled(GtkWidget* widget, gpointer data) {
-    MainWindow* win = (MainWindow*)data;
-    gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
-    GtkWidget* delete_btn = safe_get_data(win->window, "delete-btn", "on_delete_mode_toggled");
-    if (delete_btn) gtk_widget_set_sensitive(delete_btn, active);
-
-    // Toggle selection mode on flow box
-    if (win->history_flow_box) {
-        gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(win->history_flow_box),
-            active ? GTK_SELECTION_MULTIPLE : GTK_SELECTION_NONE);
-
-        // If disabling, clear all selections
-        if (!active) {
-            gtk_flow_box_unselect_all(GTK_FLOW_BOX(win->history_flow_box));
-        }
-    }
-}
+// No checkbox needed — Ctrl+Click to select/deselect, Delete button removes selected.
 
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
     (void)widget;
@@ -1872,7 +1860,7 @@ static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
 
     GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
     if (!selected) {
-        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No images selected for deletion");
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No images selected — Ctrl+Click to select");
         return;
     }
 
@@ -1910,11 +1898,8 @@ static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
     }
     g_list_free(selected);
 
-    // Uncheck delete mode
-    GtkWidget* delete_check = safe_get_data(win->window, "delete-mode-check", "on_delete_selected_clicked");
-    if (delete_check) {
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(delete_check), FALSE);
-    }
+    // Disable delete button after deletion
+    update_delete_btn_sensitivity(win);
 
     snprintf(msg, sizeof(msg), "%d screenshot%s deleted", deleted, deleted > 1 ? "s" : "");
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
@@ -3684,14 +3669,13 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_margin_top(history_toolbar, 6);
     gtk_widget_set_margin_bottom(history_toolbar, 4);
 
-    GtkWidget* delete_mode_check = gtk_check_button_new_with_label("Select for deletion");
-    safe_set_data(win->window, "delete-mode-check", delete_mode_check, "main_window_init");
-    gtk_box_pack_start(GTK_BOX(history_toolbar), delete_mode_check, FALSE, FALSE, 0);
+    GtkWidget* hint_label = gtk_label_new("Ctrl+Click to select images");
+    gtk_widget_set_opacity(hint_label, 0.5);
+    gtk_box_pack_start(GTK_BOX(history_toolbar), hint_label, FALSE, FALSE, 0);
 
     GtkWidget* delete_btn = gtk_button_new_with_label("Delete Selected");
     gtk_widget_set_sensitive(delete_btn, FALSE);
     safe_set_data(win->window, "delete-btn", delete_btn, "main_window_init");
-    g_signal_connect(delete_mode_check, "toggled", G_CALLBACK(on_delete_mode_toggled), win);
     g_signal_connect(delete_btn, "clicked", G_CALLBACK(on_delete_selected_clicked), win);
     gtk_box_pack_start(GTK_BOX(history_toolbar), delete_btn, FALSE, FALSE, 0);
 
@@ -3708,7 +3692,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     
     // Create flow box for history thumbnails
     GtkWidget* flow_box = gtk_flow_box_new();
-    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow_box), GTK_SELECTION_NONE);
+    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow_box), GTK_SELECTION_MULTIPLE);
     gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow_box), TRUE);
     gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(flow_box), 2);
     gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow_box), 5);

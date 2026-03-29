@@ -43,3 +43,4 @@
 | 2026-03-30T01:30:00-04:00 | feat: ESC cancels screenshot capture — keyboard grab on overlay popup so ESC is received |
 | 2026-03-30T02:00:00-04:00 | fix: history delete — stronger selection highlight (3px blue border + dimmed image), toggle select/deselect |
 | 2026-03-30T02:00:00-04:00 | feat: Ctrl+Scroll zoom in/out on screenshot editor (10%-1000%, status bar shows percentage) |
+| 2026-03-30T02:30:00-04:00 | refactor: history delete — replace checkbox mode with Ctrl+Click select/deselect, simpler and more reliable |
