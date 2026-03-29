@@ -22,6 +22,8 @@ typedef enum {
     ICON_COPY,
     ICON_BORDER,
     ICON_BLUR,
+    ICON_CROP,
+    ICON_RESIZE,
     ICON_SAVE,
     ICON_COUNT
 } SidebarIconType;

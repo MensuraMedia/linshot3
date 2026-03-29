@@ -226,6 +226,49 @@ static void draw_blur(cairo_t* cr, double x, double y) {
     }
 }
 
+static void draw_crop(cairo_t* cr, double x, double y) {
+    // Crop icon: two overlapping L-shaped brackets
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    // Vertical line with horizontal top
+    cairo_move_to(cr, x+S(6), y+S(2));
+    cairo_line_to(cr, x+S(6), y+S(14));
+    cairo_line_to(cr, x+S(18), y+S(14));
+    cairo_stroke(cr);
+
+    // Horizontal line with vertical bottom
+    cairo_move_to(cr, x+S(2), y+S(6));
+    cairo_line_to(cr, x+S(14), y+S(6));
+    cairo_line_to(cr, x+S(14), y+S(18));
+    cairo_stroke(cr);
+}
+
+static void draw_resize(cairo_t* cr, double x, double y) {
+    // Resize icon: diagonal double-headed arrow with corner box
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    // Small rectangle (original)
+    cairo_rectangle(cr, x+S(2), y+S(2), S(10), S(8));
+    cairo_stroke(cr);
+
+    // Diagonal arrow
+    cairo_move_to(cr, x+S(10), y+S(10));
+    cairo_line_to(cr, x+S(18), y+S(18));
+    cairo_stroke(cr);
+
+    // Arrowhead
+    cairo_move_to(cr, x+S(14), y+S(18));
+    cairo_line_to(cr, x+S(18), y+S(18));
+    cairo_line_to(cr, x+S(18), y+S(14));
+    cairo_stroke(cr);
+}
+
 // Dispatch table
 typedef void (*IconDrawFunc)(cairo_t*, double, double);
 
@@ -241,6 +284,8 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_copy,
     draw_border,
     draw_blur,
+    draw_crop,
+    draw_resize,
     draw_save
 };
 

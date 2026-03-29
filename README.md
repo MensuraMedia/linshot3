@@ -30,6 +30,8 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Multi-Paste** — Ctrl+V pastes images as movable overlays; paste multiple times for independent overlays
 - **Flatten** — Commit all overlays and annotations permanently into the image
 - **Ctrl+Scroll Zoom** — Zoom in/out on the screenshot editor (10%-1000%)
+- **Crop** — Draw a region to crop the image to that area
+- **Resize** — Resize image to custom dimensions with bilinear interpolation
 - **Multi-Format Support** — Opens and edits PNG, JPG, JPEG, BMP, GIF, WebP, TIFF files
 - **Auto Clipboard** — Every capture is automatically copied to clipboard and saved
 - **Sequential Save** — Save dialog defaults to configured path with _1, _2, _3 suffix
@@ -125,6 +127,8 @@ sudo apt remove linshot
 | Copy | Copy image or selection to clipboard |
 | Border | Draw decorative double-border frames |
 | Blur | Pixelate/mosaic regions to redact content |
+| Crop | Draw region to crop image |
+| Resize | Click to open resize dialog with width/height |
 | Save | Save image with annotations |
 
 ## License

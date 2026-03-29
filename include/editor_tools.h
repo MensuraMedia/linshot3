@@ -15,7 +15,9 @@ typedef enum {
     TOOL_MARQUEE,
     TOOL_LINE,
     TOOL_BORDER,
-    TOOL_BLUR
+    TOOL_BLUR,
+    TOOL_CROP,
+    TOOL_RESIZE
 } ToolType;
 
 // Font settings for text tool

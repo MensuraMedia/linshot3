@@ -74,6 +74,8 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
 static void update_image_info(MainWindow* win, MainWindowData* win_data, const char* filepath);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
+static void apply_crop(MainWindow* win, MainWindowData* win_data);
+static void show_resize_dialog(MainWindow* win, MainWindowData* win_data);
 static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
@@ -754,7 +756,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         }
 
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur", "Crop", "Resize"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -986,6 +988,9 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
             // Deselect any selected text when creating new text
             win_data->selected_text = NULL;
             show_text_dialog(win, win_data, event->x, event->y);
+        } else if (win_data->current_tool.type == TOOL_RESIZE) {
+            // Resize opens dialog immediately on click
+            show_resize_dialog(win, win_data);
         } else if (win_data->current_tool.type != TOOL_NONE) {
             win_data->selected_text = NULL;  // Deselect text when using other tools
             win_data->drawing = true;
@@ -1191,6 +1196,13 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
                     }
                 }
                 gtk_widget_queue_draw(win->canvas);
+            } else if (win_data->current_tool.type == TOOL_CROP) {
+                // Crop tool: crop image to drawn rectangle
+                apply_crop(win, win_data);
+            } else if (win_data->current_tool.type == TOOL_RESIZE) {
+                // Resize tool: show resize dialog on click release
+                win_data->drawing = false;
+                show_resize_dialog(win, win_data);
             } else {
                 // Normal tool: create and add new annotation
                 Annotation* annotation = annotation_create(win_data->current_tool.type, &win_data->current_tool);
@@ -1204,6 +1216,127 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
     }
     
     return TRUE;
+}
+
+static void apply_crop(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->current_image) return;
+
+    int x = MIN(win_data->start_point.x1, win_data->start_point.x2);
+    int y = MIN(win_data->start_point.y1, win_data->start_point.y2);
+    int w = abs(win_data->start_point.x2 - win_data->start_point.x1);
+    int h = abs(win_data->start_point.y2 - win_data->start_point.y1);
+
+    if (w < 2 || h < 2) return;
+
+    int img_w = cairo_image_surface_get_width(win_data->current_image);
+    int img_h = cairo_image_surface_get_height(win_data->current_image);
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > img_w) w = img_w - x;
+    if (y + h > img_h) h = img_h - y;
+
+    // Create cropped surface
+    cairo_surface_t* cropped = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t* cr = cairo_create(cropped);
+    cairo_set_source_surface(cr, win_data->current_image, -x, -y);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+
+    // Replace current image
+    cairo_surface_destroy(win_data->current_image);
+    win_data->current_image = cropped;
+    win_data->zoom_level = 1.0;
+
+    // Clear annotations (they're relative to old image coordinates)
+    g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
+    win_data->annotations = NULL;
+
+    gtk_widget_queue_draw(win->canvas);
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Cropped to %dx%d", w, h);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+    update_image_info(win, win_data, NULL);
+}
+
+static void show_resize_dialog(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->current_image) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image to resize");
+        return;
+    }
+
+    int cur_w = cairo_image_surface_get_width(win_data->current_image);
+    int cur_h = cairo_image_surface_get_height(win_data->current_image);
+
+    GtkWidget* dialog = gtk_dialog_new_with_buttons("Resize Image",
+        GTK_WINDOW(win->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Resize", GTK_RESPONSE_ACCEPT,
+        NULL);
+
+    GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(content), 15);
+
+    char cur_size[64];
+    snprintf(cur_size, sizeof(cur_size), "Current: %dx%d", cur_w, cur_h);
+    GtkWidget* cur_label = gtk_label_new(cur_size);
+    gtk_widget_set_halign(cur_label, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), cur_label, FALSE, FALSE, 5);
+
+    GtkWidget* w_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* w_label = gtk_label_new("Width:");
+    GtkWidget* w_spin = gtk_spin_button_new_with_range(1, 10000, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(w_spin), cur_w);
+    gtk_box_pack_start(GTK_BOX(w_row), w_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(w_row), w_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), w_row, FALSE, FALSE, 2);
+
+    GtkWidget* h_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* h_label = gtk_label_new("Height:");
+    GtkWidget* h_spin = gtk_spin_button_new_with_range(1, 10000, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(h_spin), cur_h);
+    gtk_box_pack_start(GTK_BOX(h_row), h_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(h_row), h_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), h_row, FALSE, FALSE, 2);
+
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        int new_w = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(w_spin));
+        int new_h = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(h_spin));
+
+        if (new_w > 0 && new_h > 0 && (new_w != cur_w || new_h != cur_h)) {
+            // Resize using GdkPixbuf for quality interpolation
+            GdkPixbuf* pb = gdk_pixbuf_get_from_surface(win_data->current_image, 0, 0, cur_w, cur_h);
+            if (pb) {
+                GdkPixbuf* resized = gdk_pixbuf_scale_simple(pb, new_w, new_h, GDK_INTERP_BILINEAR);
+                g_object_unref(pb);
+
+                if (resized) {
+                    cairo_surface_destroy(win_data->current_image);
+                    win_data->current_image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, new_w, new_h);
+                    cairo_t* cr = cairo_create(win_data->current_image);
+                    gdk_cairo_set_source_pixbuf(cr, resized, 0, 0);
+                    cairo_paint(cr);
+                    cairo_destroy(cr);
+                    g_object_unref(resized);
+
+                    win_data->zoom_level = 1.0;
+                    g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
+                    win_data->annotations = NULL;
+
+                    gtk_widget_queue_draw(win->canvas);
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Resized to %dx%d", new_w, new_h);
+                    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+                    update_image_info(win, win_data, NULL);
+                }
+            }
+        }
+    }
+
+    gtk_widget_destroy(dialog);
 }
 
 static void undo_last_annotation(MainWindowData* win_data) {
@@ -3665,7 +3798,8 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create buttons with icons and labels
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Border", "Blur", "Save"
+        "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy",
+        "Border", "Blur", "Crop", "Resize", "Save"
     };
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
@@ -3680,10 +3814,12 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         {'a', 2},               // 8: Copy
         {'t', TOOL_BORDER},     // 9: Border
         {'t', TOOL_BLUR},       // 10: Blur
-        {'a', 3}                // 11: Save
+        {'t', TOOL_CROP},       // 11: Crop
+        {'t', TOOL_RESIZE},     // 12: Resize
+        {'a', 3}                // 13: Save
     };
 
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 14; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -3720,7 +3856,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
         } else if (i == 8) { // Copy
             g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 11) { // Save
+        } else if (i == 13) { // Save
             g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
@@ -3872,19 +4008,22 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     GtkWidget* bottom_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_pack_start(GTK_BOX(content_area), bottom_bar, FALSE, FALSE, 0);
 
-    // Image info label — persistent, not overwritten by status messages
-    GtkWidget* info_frame = gtk_frame_new(NULL);
-    gtk_frame_set_shadow_type(GTK_FRAME(info_frame), GTK_SHADOW_ETCHED_IN);
+    // Image info label — persistent, no border
     GtkWidget* image_info_label = gtk_label_new("");
     gtk_widget_set_margin_start(image_info_label, 8);
-    gtk_widget_set_margin_end(image_info_label, 8);
+    gtk_widget_set_margin_end(image_info_label, 4);
     gtk_widget_set_margin_top(image_info_label, 2);
     gtk_widget_set_margin_bottom(image_info_label, 2);
     gtk_label_set_xalign(GTK_LABEL(image_info_label), 0.0);
-    gtk_widget_set_size_request(info_frame, 180, -1);
-    gtk_container_add(GTK_CONTAINER(info_frame), image_info_label);
-    gtk_box_pack_start(GTK_BOX(bottom_bar), info_frame, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(bottom_bar), image_info_label, FALSE, FALSE, 0);
     safe_set_data(win->window, "image-info-label", image_info_label, "main_window_init");
+
+    // Vertical separator pipe
+    GtkWidget* info_sep = gtk_label_new("|");
+    gtk_widget_set_opacity(info_sep, 0.3);
+    gtk_widget_set_margin_start(info_sep, 4);
+    gtk_widget_set_margin_end(info_sep, 4);
+    gtk_box_pack_start(GTK_BOX(bottom_bar), info_sep, FALSE, FALSE, 0);
 
     // Statusbar — for transient messages (zoom, copy, save, etc.)
     win->statusbar = gtk_statusbar_new();
