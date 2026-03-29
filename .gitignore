@@ -45,6 +45,9 @@ generate_icon.c
 # Debian packages
 *.deb
 
+# Runtime data
+linshot_recent_history/
+
 # Other
 linshot
 screenshot_app
