@@ -52,3 +52,4 @@
 | 2026-03-30T05:00:00-04:00 | feat: rename History tab to Files; support all image formats in editor (PNG, JPG, BMP, GIF, WebP, TIFF) |
 | 2026-03-30T05:10:00-04:00 | feat: rename Screenshot tab to Image; update all documentation |
 | 2026-03-30T05:30:00-04:00 | feat: remove tab outline/curved border; show image dimensions and file size in status bar |
+| 2026-03-30T05:45:00-04:00 | feat: dedicated image info panel (left, framed) separate from status bar — persistent, not overwritten |

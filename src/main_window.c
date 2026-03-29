@@ -1291,7 +1291,13 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data) {
 }
 
 static void update_image_info(MainWindow* win, MainWindowData* win_data, const char* filepath) {
-    if (!win_data->current_image) return;
+    GtkWidget* info_label = safe_get_data(win->window, "image-info-label", "update_image_info");
+    if (!info_label || !GTK_IS_LABEL(info_label)) return;
+
+    if (!win_data->current_image) {
+        gtk_label_set_text(GTK_LABEL(info_label), "");
+        return;
+    }
 
     int w = cairo_image_surface_get_width(win_data->current_image);
     int h = cairo_image_surface_get_height(win_data->current_image);
@@ -1312,7 +1318,7 @@ static void update_image_info(MainWindow* win, MainWindowData* win_data, const c
 
     char msg[128];
     snprintf(msg, sizeof(msg), "%dx%d%s", w, h, size_str);
-    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+    gtk_label_set_text(GTK_LABEL(info_label), msg);
 }
 
 static void paste_overlay_free(PasteOverlay* overlay) {
@@ -3862,9 +3868,27 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     g_signal_connect(flow_box, "selected-children-changed", G_CALLBACK(on_history_selection_changed), win);
     g_signal_connect(flow_box, "child-activated", G_CALLBACK(on_history_child_activated), win);
     
-    // Create statusbar
+    // Create bottom bar: image info (left) + statusbar (right)
+    GtkWidget* bottom_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_pack_start(GTK_BOX(content_area), bottom_bar, FALSE, FALSE, 0);
+
+    // Image info label — persistent, not overwritten by status messages
+    GtkWidget* info_frame = gtk_frame_new(NULL);
+    gtk_frame_set_shadow_type(GTK_FRAME(info_frame), GTK_SHADOW_ETCHED_IN);
+    GtkWidget* image_info_label = gtk_label_new("");
+    gtk_widget_set_margin_start(image_info_label, 8);
+    gtk_widget_set_margin_end(image_info_label, 8);
+    gtk_widget_set_margin_top(image_info_label, 2);
+    gtk_widget_set_margin_bottom(image_info_label, 2);
+    gtk_label_set_xalign(GTK_LABEL(image_info_label), 0.0);
+    gtk_widget_set_size_request(info_frame, 180, -1);
+    gtk_container_add(GTK_CONTAINER(info_frame), image_info_label);
+    gtk_box_pack_start(GTK_BOX(bottom_bar), info_frame, FALSE, FALSE, 0);
+    safe_set_data(win->window, "image-info-label", image_info_label, "main_window_init");
+
+    // Statusbar — for transient messages (zoom, copy, save, etc.)
     win->statusbar = gtk_statusbar_new();
-    gtk_box_pack_start(GTK_BOX(content_area), win->statusbar, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(bottom_bar), win->statusbar, TRUE, TRUE, 0);
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Ready");
     
     // Update window data with canvas and statusbar
