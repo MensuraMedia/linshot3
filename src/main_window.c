@@ -74,6 +74,8 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
 static void update_image_info(MainWindow* win, MainWindowData* win_data, const char* filepath);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
+static void push_image_undo(MainWindowData* win_data);
+static void undo_last_annotation(MainWindowData* win_data);
 static void apply_crop(MainWindow* win, MainWindowData* win_data);
 static void show_resize_dialog(MainWindow* win, MainWindowData* win_data);
 static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data);
@@ -1263,6 +1265,7 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
 
 static void apply_crop(MainWindow* win, MainWindowData* win_data) {
     if (!win_data->current_image) return;
+    push_image_undo(win_data);
 
     int x = MIN(win_data->start_point.x1, win_data->start_point.x2);
     int y = MIN(win_data->start_point.y1, win_data->start_point.y2);
@@ -1302,8 +1305,28 @@ static void apply_crop(MainWindow* win, MainWindowData* win_data) {
     update_image_info(win, win_data, NULL);
 }
 
+// Push current image state onto undo stack (for image-level operations)
+static void push_image_undo(MainWindowData* win_data) {
+    if (!win_data->current_image) return;
+    int w = cairo_image_surface_get_width(win_data->current_image);
+    int h = cairo_image_surface_get_height(win_data->current_image);
+    cairo_surface_t* copy = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t* cr = cairo_create(copy);
+    cairo_set_source_surface(cr, win_data->current_image, 0, 0);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    win_data->image_undo_stack = g_list_prepend(win_data->image_undo_stack, copy);
+    // Limit stack to 20 entries
+    while (g_list_length(win_data->image_undo_stack) > 20) {
+        GList* last = g_list_last(win_data->image_undo_stack);
+        cairo_surface_destroy((cairo_surface_t*)last->data);
+        win_data->image_undo_stack = g_list_delete_link(win_data->image_undo_stack, last);
+    }
+}
+
 // Helper: replace current image with a new pixbuf
 static void replace_image_from_pixbuf(MainWindow* win, MainWindowData* win_data, GdkPixbuf* pb, const char* status_msg) {
+    push_image_undo(win_data);
     int new_w = gdk_pixbuf_get_width(pb);
     int new_h = gdk_pixbuf_get_height(pb);
     cairo_surface_destroy(win_data->current_image);
@@ -1329,38 +1352,60 @@ static void show_resize_dialog(MainWindow* win, MainWindowData* win_data) {
     int cur_w = cairo_image_surface_get_width(win_data->current_image);
     int cur_h = cairo_image_surface_get_height(win_data->current_image);
 
-    GtkWidget* dialog = gtk_dialog_new_with_buttons("Resize",
+    GtkWidget* dialog = gtk_dialog_new_with_buttons("Resize Image",
         GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-        "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_ACCEPT, NULL);
+        "Cancel", GTK_RESPONSE_CANCEL, "Resize", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 380, -1);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 24);
+    gtk_box_set_spacing(GTK_BOX(content), 10);
 
+    // Current size
     char cur_size[64];
-    snprintf(cur_size, sizeof(cur_size), "Current: %dx%d", cur_w, cur_h);
-    gtk_box_pack_start(GTK_BOX(content), gtk_label_new(cur_size), FALSE, FALSE, 4);
+    snprintf(cur_size, sizeof(cur_size), "Current size:  %d x %d pixels", cur_w, cur_h);
+    GtkWidget* cur_label = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(cur_label), cur_size);
+    gtk_widget_set_halign(cur_label, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), cur_label, FALSE, FALSE, 4);
 
-    // Percentage
-    GtkWidget* prow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_pack_start(GTK_BOX(prow), gtk_label_new("Scale %:"), FALSE, FALSE, 0);
+    // --- Scale by percentage ---
+    GtkWidget* pct_title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(pct_title), "<b>Scale by Percentage</b>");
+    gtk_widget_set_halign(pct_title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), pct_title, FALSE, FALSE, 2);
+
+    GtkWidget* prow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_box_pack_start(GTK_BOX(prow), gtk_label_new("Scale:"), FALSE, FALSE, 0);
     GtkWidget* pct_spin = gtk_spin_button_new_with_range(1, 500, 5);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(pct_spin), 100);
     gtk_box_pack_start(GTK_BOX(prow), pct_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(content), prow, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(prow), gtk_label_new("%"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), prow, FALSE, FALSE, 4);
 
-    // Or exact pixels
-    GtkWidget* sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_box_pack_start(GTK_BOX(content), sep, FALSE, FALSE, 4);
+    // Separator
+    gtk_box_pack_start(GTK_BOX(content), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 6);
 
-    GtkWidget* drow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_pack_start(GTK_BOX(drow), gtk_label_new("W:"), FALSE, FALSE, 0);
+    // --- Exact dimensions ---
+    GtkWidget* dim_title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(dim_title), "<b>Exact Dimensions</b>");
+    gtk_widget_set_halign(dim_title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), dim_title, FALSE, FALSE, 2);
+
+    GtkWidget* w_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_box_pack_start(GTK_BOX(w_row), gtk_label_new("Width:"), FALSE, FALSE, 0);
     GtkWidget* w_spin = gtk_spin_button_new_with_range(1, 10000, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(w_spin), cur_w);
-    gtk_box_pack_start(GTK_BOX(drow), w_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(drow), gtk_label_new("H:"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(w_row), w_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(w_row), gtk_label_new("px"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), w_row, FALSE, FALSE, 4);
+
+    GtkWidget* h_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_box_pack_start(GTK_BOX(h_row), gtk_label_new("Height:"), FALSE, FALSE, 0);
     GtkWidget* h_spin = gtk_spin_button_new_with_range(1, 10000, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(h_spin), cur_h);
-    gtk_box_pack_start(GTK_BOX(drow), h_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(content), drow, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(h_row), h_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(h_row), gtk_label_new("px"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), h_row, FALSE, FALSE, 4);
 
     gtk_widget_show_all(dialog);
 
@@ -1403,14 +1448,63 @@ static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
     GtkWidget* dialog = gtk_dialog_new_with_buttons("Rotate / Flip",
         GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "Cancel", GTK_RESPONSE_CANCEL, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 320, -1);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 20);
+    gtk_box_set_spacing(GTK_BOX(content), 8);
 
-    // Action buttons — each emits a custom dialog response
-    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 90\xC2\xB0 Right", 10);
-    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 90\xC2\xB0 Left", 11);
-    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 180\xC2\xB0", 12);
-    gtk_dialog_add_button(GTK_DIALOG(dialog), "Flip Horizontal", 13);
+    // 2x2 grid + 1 extra
+    GtkWidget* grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 8);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
+
+    const char* labels[] = {
+        "Rotate 90\xC2\xB0 Right", "Rotate 90\xC2\xB0 Left",
+        "Rotate 180\xC2\xB0", "Flip Horizontal"
+    };
+    const int responses[] = {10, 11, 12, 13};
+    for (int i = 0; i < 4; i++) {
+        GtkWidget* btn = gtk_button_new_with_label(labels[i]);
+        g_object_set_data(G_OBJECT(btn), "resp", GINT_TO_POINTER(responses[i]));
+        g_signal_connect_swapped(btn, "clicked",
+            G_CALLBACK(gtk_dialog_response), dialog);
+        g_object_set_data(G_OBJECT(btn), "resp-val", GINT_TO_POINTER(responses[i]));
+        gtk_grid_attach(GTK_GRID(grid), btn, i % 2, i / 2, 1, 1);
+    }
+    gtk_box_pack_start(GTK_BOX(content), grid, FALSE, FALSE, 0);
+
+    // Flip Vertical centered below
+    GtkWidget* flip_v = gtk_button_new_with_label("Flip Vertical");
+    gtk_box_pack_start(GTK_BOX(content), flip_v, FALSE, FALSE, 0);
+
+    // Connect all buttons to emit dialog responses
+    // Re-do connections properly: buttons in the grid need to call gtk_dialog_response
+    GList* children = gtk_container_get_children(GTK_CONTAINER(grid));
+    int resp_idx = 0;
+    for (GList* l = children; l; l = l->next, resp_idx++) {
+        GtkWidget* btn = GTK_WIDGET(l->data);
+        g_signal_handlers_disconnect_by_func(btn, G_CALLBACK(gtk_dialog_response), dialog);
+    }
+    g_list_free(children);
+
+    // Simpler approach: use direct response IDs
+    // Remove grid and use dialog buttons instead
+    gtk_widget_destroy(grid);
+    gtk_widget_destroy(flip_v);
+
+    // Use a 2x2+1 layout with regular buttons that call gtk_dialog_response
+    GtkWidget* grid2 = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid2), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(grid2), 10);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid2), TRUE);
+
+    const char* btn_labels[] = {"Rotate 90\xC2\xB0 Right", "Rotate 90\xC2\xB0 Left",
+                                 "Rotate 180\xC2\xB0", "Flip Horizontal"};
+    const int btn_resp[] = {10, 11, 12, 13};
+    for (int i = 0; i < 4; i++) {
+        gtk_dialog_add_button(GTK_DIALOG(dialog), btn_labels[i], btn_resp[i]);
+    }
     gtk_dialog_add_button(GTK_DIALOG(dialog), "Flip Vertical", 14);
 
     gtk_widget_show_all(dialog);
@@ -1423,28 +1517,12 @@ static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
     GdkPixbuf* result = NULL;
     const char* msg = "";
     switch (response) {
-        case 10:
-            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_CLOCKWISE);
-            msg = "Rotated 90\xC2\xB0 right";
-            break;
-        case 11:
-            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_COUNTERCLOCKWISE);
-            msg = "Rotated 90\xC2\xB0 left";
-            break;
-        case 12:
-            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_UPSIDEDOWN);
-            msg = "Rotated 180\xC2\xB0";
-            break;
-        case 13:
-            result = gdk_pixbuf_flip(pb, TRUE);
-            msg = "Flipped horizontal";
-            break;
-        case 14:
-            result = gdk_pixbuf_flip(pb, FALSE);
-            msg = "Flipped vertical";
-            break;
-        default:
-            break;
+        case 10: result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_CLOCKWISE); msg = "Rotated 90 right"; break;
+        case 11: result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_COUNTERCLOCKWISE); msg = "Rotated 90 left"; break;
+        case 12: result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_UPSIDEDOWN); msg = "Rotated 180"; break;
+        case 13: result = gdk_pixbuf_flip(pb, TRUE); msg = "Flipped horizontal"; break;
+        case 14: result = gdk_pixbuf_flip(pb, FALSE); msg = "Flipped vertical"; break;
+        default: break;
     }
 
     g_object_unref(pb);
@@ -1454,119 +1532,176 @@ static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
     }
 }
 
+// Brightness dialog state for real-time preview
+typedef struct {
+    MainWindow* win;
+    MainWindowData* win_data;
+    cairo_surface_t* original;  // Copy of image before adjustments
+    GtkWidget* br_scale;
+    GtkWidget* ct_scale;
+    GtkWidget* bw_check;
+    GtkWidget* inv_check;
+    int width, height;
+} BrightnessState;
+
+static void apply_brightness_preview(BrightnessState* state) {
+    double brightness = gtk_range_get_value(GTK_RANGE(state->br_scale)) / 100.0;
+    double contrast = gtk_range_get_value(GTK_RANGE(state->ct_scale)) / 100.0;
+    gboolean grayscale = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->bw_check));
+    gboolean invert = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->inv_check));
+
+    // Restore from original first
+    cairo_surface_flush(state->original);
+    unsigned char* src = cairo_image_surface_get_data(state->original);
+    int src_stride = cairo_image_surface_get_stride(state->original);
+
+    cairo_surface_flush(state->win_data->current_image);
+    unsigned char* dst = cairo_image_surface_get_data(state->win_data->current_image);
+    int dst_stride = cairo_image_surface_get_stride(state->win_data->current_image);
+
+    double cf = 1.0 + contrast;
+    for (int y = 0; y < state->height; y++) {
+        for (int x = 0; x < state->width; x++) {
+            int si = y * src_stride + x * 4;
+            int di = y * dst_stride + x * 4;
+            double b = src[si + 0] / 255.0;
+            double g = src[si + 1] / 255.0;
+            double r = src[si + 2] / 255.0;
+            double a = src[si + 3];
+
+            r += brightness; g += brightness; b += brightness;
+            r = (r - 0.5) * cf + 0.5;
+            g = (g - 0.5) * cf + 0.5;
+            b = (b - 0.5) * cf + 0.5;
+            if (grayscale) { double l = r*0.299 + g*0.587 + b*0.114; r=g=b=l; }
+            if (invert) { r=1-r; g=1-g; b=1-b; }
+            r = r < 0 ? 0 : (r > 1 ? 1 : r);
+            g = g < 0 ? 0 : (g > 1 ? 1 : g);
+            b = b < 0 ? 0 : (b > 1 ? 1 : b);
+
+            dst[di + 0] = (unsigned char)(b * 255);
+            dst[di + 1] = (unsigned char)(g * 255);
+            dst[di + 2] = (unsigned char)(r * 255);
+            dst[di + 3] = (unsigned char)(a);
+        }
+    }
+    cairo_surface_mark_dirty(state->win_data->current_image);
+    gtk_widget_queue_draw(state->win->canvas);
+}
+
+static void on_brightness_changed(GtkWidget* widget, gpointer data) {
+    (void)widget;
+    apply_brightness_preview((BrightnessState*)data);
+}
+
 static void show_brightness_dialog(MainWindow* win, MainWindowData* win_data) {
     if (!win_data->current_image) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image");
         return;
     }
 
+    // Save original for undo and real-time preview
+    push_image_undo(win_data);
+
     int cur_w = cairo_image_surface_get_width(win_data->current_image);
     int cur_h = cairo_image_surface_get_height(win_data->current_image);
+
+    // Make a working copy of the original for preview restoration
+    cairo_surface_t* original = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, cur_w, cur_h);
+    cairo_t* copy_cr = cairo_create(original);
+    cairo_set_source_surface(copy_cr, win_data->current_image, 0, 0);
+    cairo_paint(copy_cr);
+    cairo_destroy(copy_cr);
 
     GtkWidget* dialog = gtk_dialog_new_with_buttons("Brightness / Color",
         GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 400, -1);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 20);
+    gtk_box_set_spacing(GTK_BOX(content), 8);
 
-    // Brightness slider
-    GtkWidget* br_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_pack_start(GTK_BOX(br_row), gtk_label_new("Brightness:"), FALSE, FALSE, 0);
-    GtkWidget* br_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 5);
-    gtk_range_set_value(GTK_RANGE(br_scale), 0);
-    gtk_widget_set_size_request(br_scale, 200, -1);
-    gtk_box_pack_start(GTK_BOX(br_row), br_scale, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(content), br_row, FALSE, FALSE, 4);
+    // State for callbacks
+    BrightnessState state = {win, win_data, original, NULL, NULL, NULL, NULL, cur_w, cur_h};
 
-    // Contrast slider
-    GtkWidget* ct_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_pack_start(GTK_BOX(ct_row), gtk_label_new("Contrast:    "), FALSE, FALSE, 0);
-    GtkWidget* ct_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 5);
-    gtk_range_set_value(GTK_RANGE(ct_scale), 0);
-    gtk_widget_set_size_request(ct_scale, 200, -1);
-    gtk_box_pack_start(GTK_BOX(ct_row), ct_scale, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(content), ct_row, FALSE, FALSE, 4);
+    // Brightness
+    GtkWidget* br_title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(br_title), "<b>Brightness</b>");
+    gtk_widget_set_halign(br_title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), br_title, FALSE, FALSE, 0);
+    state.br_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 1);
+    gtk_range_set_value(GTK_RANGE(state.br_scale), 0);
+    gtk_scale_set_value_pos(GTK_SCALE(state.br_scale), GTK_POS_RIGHT);
+    gtk_widget_set_size_request(state.br_scale, 300, -1);
+    g_signal_connect(state.br_scale, "value-changed", G_CALLBACK(on_brightness_changed), &state);
+    gtk_box_pack_start(GTK_BOX(content), state.br_scale, FALSE, FALSE, 4);
 
-    // Grayscale / Invert buttons
-    GtkWidget* bw_check = gtk_check_button_new_with_label("Grayscale (Black & White)");
-    gtk_box_pack_start(GTK_BOX(content), bw_check, FALSE, FALSE, 4);
-    GtkWidget* inv_check = gtk_check_button_new_with_label("Invert Colors");
-    gtk_box_pack_start(GTK_BOX(content), inv_check, FALSE, FALSE, 2);
+    // Contrast
+    GtkWidget* ct_title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(ct_title), "<b>Contrast</b>");
+    gtk_widget_set_halign(ct_title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(content), ct_title, FALSE, FALSE, 0);
+    state.ct_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 1);
+    gtk_range_set_value(GTK_RANGE(state.ct_scale), 0);
+    gtk_scale_set_value_pos(GTK_SCALE(state.ct_scale), GTK_POS_RIGHT);
+    gtk_widget_set_size_request(state.ct_scale, 300, -1);
+    g_signal_connect(state.ct_scale, "value-changed", G_CALLBACK(on_brightness_changed), &state);
+    gtk_box_pack_start(GTK_BOX(content), state.ct_scale, FALSE, FALSE, 4);
+
+    gtk_box_pack_start(GTK_BOX(content), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 6);
+
+    // Grayscale + Invert
+    state.bw_check = gtk_check_button_new_with_label("Grayscale (Black & White)");
+    g_signal_connect(state.bw_check, "toggled", G_CALLBACK(on_brightness_changed), &state);
+    gtk_box_pack_start(GTK_BOX(content), state.bw_check, FALSE, FALSE, 4);
+
+    state.inv_check = gtk_check_button_new_with_label("Invert Colors");
+    g_signal_connect(state.inv_check, "toggled", G_CALLBACK(on_brightness_changed), &state);
+    gtk_box_pack_start(GTK_BOX(content), state.inv_check, FALSE, FALSE, 4);
 
     gtk_widget_show_all(dialog);
 
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-        double brightness = gtk_range_get_value(GTK_RANGE(br_scale)) / 100.0;
-        double contrast = gtk_range_get_value(GTK_RANGE(ct_scale)) / 100.0;
-        gboolean grayscale = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bw_check));
-        gboolean invert = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(inv_check));
-
-        if (brightness != 0 || contrast != 0 || grayscale || invert) {
-            // Apply pixel-level adjustments
-            cairo_surface_flush(win_data->current_image);
-            unsigned char* data = cairo_image_surface_get_data(win_data->current_image);
-            int stride = cairo_image_surface_get_stride(win_data->current_image);
-
-            double cf = 1.0 + contrast;  // contrast factor
-            for (int y = 0; y < cur_h; y++) {
-                for (int x = 0; x < cur_w; x++) {
-                    int idx = y * stride + x * 4;
-                    double b = data[idx + 0] / 255.0;
-                    double g = data[idx + 1] / 255.0;
-                    double r = data[idx + 2] / 255.0;
-
-                    // Brightness
-                    r += brightness; g += brightness; b += brightness;
-
-                    // Contrast (around midpoint 0.5)
-                    r = (r - 0.5) * cf + 0.5;
-                    g = (g - 0.5) * cf + 0.5;
-                    b = (b - 0.5) * cf + 0.5;
-
-                    // Grayscale
-                    if (grayscale) {
-                        double lum = r * 0.299 + g * 0.587 + b * 0.114;
-                        r = g = b = lum;
-                    }
-
-                    // Invert
-                    if (invert) { r = 1.0 - r; g = 1.0 - g; b = 1.0 - b; }
-
-                    // Clamp
-                    r = r < 0 ? 0 : (r > 1 ? 1 : r);
-                    g = g < 0 ? 0 : (g > 1 ? 1 : g);
-                    b = b < 0 ? 0 : (b > 1 ? 1 : b);
-
-                    data[idx + 0] = (unsigned char)(b * 255);
-                    data[idx + 1] = (unsigned char)(g * 255);
-                    data[idx + 2] = (unsigned char)(r * 255);
-                }
-            }
-            cairo_surface_mark_dirty(win_data->current_image);
-            gtk_widget_queue_draw(win->canvas);
-            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Brightness/color adjusted");
-        }
-    }
+    int response = gtk_dialog_run(GTK_DIALOG(dialog));
     gtk_widget_destroy(dialog);
+
+    if (response != GTK_RESPONSE_ACCEPT) {
+        // Cancel — restore original from undo stack
+        undo_last_annotation(win_data);
+    } else {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Brightness/color adjusted");
+    }
+
+    cairo_surface_destroy(original);
 }
 
 static void undo_last_annotation(MainWindowData* win_data) {
-    if (!win_data->annotations) {
-        return;  // Nothing to undo
+    // First try undoing annotations
+    if (win_data->annotations) {
+        GList* last = g_list_last(win_data->annotations);
+        Annotation* annotation = last->data;
+        win_data->annotations = g_list_delete_link(win_data->annotations, last);
+        win_data->undo_stack = g_list_append(win_data->undo_stack, annotation);
+        gtk_widget_queue_draw(win_data->win.canvas);
+        return;
     }
-    
-    // Get the last annotation
-    GList* last = g_list_last(win_data->annotations);
-    Annotation* annotation = last->data;
-    
-    // Remove it from the current list
-    win_data->annotations = g_list_delete_link(win_data->annotations, last);
-    
-    // Add it to the undo stack
-    win_data->undo_stack = g_list_append(win_data->undo_stack, annotation);
-    
-    // Redraw canvas
-    gtk_widget_queue_draw(win_data->win.canvas);
+
+    // No annotations — try undoing image-level operations (crop, resize, rotate, brightness)
+    if (win_data->image_undo_stack) {
+        GList* top = win_data->image_undo_stack;
+        cairo_surface_t* prev = (cairo_surface_t*)top->data;
+        win_data->image_undo_stack = g_list_delete_link(win_data->image_undo_stack, top);
+
+        if (win_data->current_image) {
+            cairo_surface_destroy(win_data->current_image);
+        }
+        win_data->current_image = prev;
+        win_data->zoom_level = 1.0;
+        gtk_widget_queue_draw(win_data->win.canvas);
+
+        MainWindow* mwin = &win_data->win;
+        update_image_info(mwin, win_data, NULL);
+        gtk_statusbar_push(GTK_STATUSBAR(mwin->statusbar), 0, "Undo: image restored");
+    }
 }
 
 static void flatten_paste_overlay(MainWindow* win, MainWindowData* win_data) {
@@ -3893,6 +4028,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     data->paste_overlays = NULL;
     data->dragging_overlay = NULL;
     data->zoom_level = 1.0;
+    data->image_undo_stack = NULL;
 
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");

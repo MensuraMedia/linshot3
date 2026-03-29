@@ -50,6 +50,7 @@ typedef struct {
     GList* paste_overlays;     // List of PasteOverlay* for multi-paste
     PasteOverlay* dragging_overlay; // Which overlay is being dragged
     double zoom_level;         // Canvas zoom (1.0 = 100%)
+    GList* image_undo_stack;   // Stack of cairo_surface_t* for image-level undo
 } MainWindowData;
 
 // Initialize and show the main window
