@@ -27,6 +27,7 @@ set(SOURCES
     src/screenshot_history.c
     src/utils.c
     src/crosshair_drawer.c
+    src/sidebar_icons.c
 )
 
 # Add header files
@@ -38,6 +39,7 @@ set(HEADERS
     include/screenshot_history.h
     include/utils.h
     include/crosshair_drawer.h
+    include/sidebar_icons.h
 )
 
 # Create executable
