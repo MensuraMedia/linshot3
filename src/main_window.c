@@ -61,7 +61,8 @@ static void toggle_autostart(bool enable);
 static void toggle_default_screenshot_app(bool enable);
 static bool is_desktop_env(const char* name);
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win);
-static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data);
+static void on_history_selection_changed(GtkFlowBox* flow_box, gpointer data);
+static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* child, gpointer data);
 static void on_browse_clicked(GtkWidget* widget, gpointer data);
 static void create_settings_page(MainWindow* win, GtkWidget* notebook);
 static void on_settings_changed(GtkWidget* widget, gpointer data);
@@ -584,7 +585,16 @@ static void on_capture_button_clicked(GtkWidget* widget, gpointer data) {
         gtk_flow_box_insert(GTK_FLOW_BOX(win->history_flow_box), item_widget, -1);
     }
     gtk_widget_show_all(win->history_flow_box);
-    
+
+    // Update image count label
+    GtkWidget* count_lbl = safe_get_data(win->window, "history-count-label", "refresh_history");
+    if (count_lbl && GTK_IS_LABEL(count_lbl)) {
+        int cnt = g_list_length(entries);
+        char cnt_msg[32];
+        snprintf(cnt_msg, sizeof(cnt_msg), "%d image%s", cnt, cnt != 1 ? "s" : "");
+        gtk_label_set_text(GTK_LABEL(count_lbl), cnt_msg);
+    }
+
     // Update window data
     if (win_data->current_image) {
         cairo_surface_destroy(win_data->current_image);
@@ -1359,9 +1369,24 @@ static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event
     if (!event || event->type != GDK_KEY_PRESS) return GDK_FILTER_CONTINUE;
 
     GdkEventKey* key = (GdkEventKey*)event;
+    MainWindow* win = (MainWindow*)data;
+
+    // Delete key: delete selected history images (no modifier needed)
+    if (key->keyval == GDK_KEY_Delete && win->history_flow_box) {
+        GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
+        if (selected) {
+            // Trigger the delete button click
+            GtkWidget* delete_btn = safe_get_data(win->window, "delete-btn", "key_filter_func_global");
+            if (delete_btn && gtk_widget_get_sensitive(delete_btn)) {
+                on_delete_selected_clicked(delete_btn, win);
+            }
+            g_list_free(selected);
+            return GDK_FILTER_REMOVE;
+        }
+    }
+
     if (!(key->state & GDK_CONTROL_MASK)) return GDK_FILTER_CONTINUE;
 
-    MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "key_filter_func_global");
     if (!win_data) return GDK_FILTER_CONTINUE;
 
@@ -1764,8 +1789,17 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
         }
         
         gtk_widget_show_all(win->history_flow_box);
+
+        // Update image count
+        GtkWidget* cnt_lbl = safe_get_data(win->window, "history-count-label", "settings_refresh_history");
+        if (cnt_lbl && GTK_IS_LABEL(cnt_lbl)) {
+            int cnt = g_list_length(entries);
+            char cnt_msg[32];
+            snprintf(cnt_msg, sizeof(cnt_msg), "%d image%s", cnt, cnt != 1 ? "s" : "");
+            gtk_label_set_text(GTK_LABEL(cnt_lbl), cnt_msg);
+        }
     }
-    
+
     // Clean up
     g_object_unref(pixbuf);
     cairo_destroy(cr);
@@ -1777,31 +1811,32 @@ static void update_delete_btn_sensitivity(MainWindow* win) {
     if (!delete_btn || !win->history_flow_box) return;
     GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
     gtk_widget_set_sensitive(delete_btn, selected != NULL);
+    if (selected) {
+        int count = g_list_length(selected);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%d image%s selected", count, count > 1 ? "s" : "");
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+    }
     g_list_free(selected);
 }
 
-static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
+// Called when flow box selection changes (Ctrl+Click, Shift+Click handled natively by GTK)
+static void on_history_selection_changed(GtkFlowBox* flow_box, gpointer data) {
+    (void)flow_box;
     MainWindow* win = (MainWindow*)data;
+    update_delete_btn_sensitivity(win);
+}
 
-    // Ctrl+Click: toggle selection for deletion
-    if (event->state & GDK_CONTROL_MASK) {
-        GtkWidget* flow_child = gtk_widget_get_parent(widget);
-        if (flow_child && GTK_IS_FLOW_BOX_CHILD(flow_child)) {
-            GtkFlowBox* flow_box = GTK_FLOW_BOX(gtk_widget_get_parent(flow_child));
-            if (flow_box) {
-                if (gtk_flow_box_child_is_selected(GTK_FLOW_BOX_CHILD(flow_child))) {
-                    gtk_flow_box_unselect_child(flow_box, GTK_FLOW_BOX_CHILD(flow_child));
-                } else {
-                    gtk_flow_box_select_child(flow_box, GTK_FLOW_BOX_CHILD(flow_child));
-                }
-                update_delete_btn_sensitivity(win);
-            }
-        }
-        return;
-    }
+// Double-click (child-activated) opens image in editor
+static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* child, gpointer data) {
+    (void)flow_box;
+    MainWindow* win = (MainWindow*)data;
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_history_child_activated");
 
-    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_history_item_clicked");
-    const char* filepath = safe_get_data(widget, "filepath", "on_history_item_clicked");
+    GtkWidget* event_box = gtk_bin_get_child(GTK_BIN(child));
+    if (!event_box) return;
+    const char* filepath = safe_get_data(event_box, "filepath", "on_history_child_activated");
+    if (!filepath) return;
 
     // Load the image
     cairo_surface_t* surface = cairo_image_surface_create_from_png(filepath);
@@ -1809,44 +1844,43 @@ static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gp
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Failed to load image");
         return;
     }
-    
+
     // Clean up existing image and annotations
     if (win_data->current_image) {
         cairo_surface_destroy(win_data->current_image);
     }
     g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
-    
+
     // Set the new image
     win_data->current_image = surface;
     win_data->annotations = NULL;
-    win_data->zoom_level = 1.0;  // Reset zoom on new image
+    win_data->zoom_level = 1.0;
 
-    // Switch to screenshot tab (it's the first tab)
+    // Clear any selections
+    gtk_flow_box_unselect_all(GTK_FLOW_BOX(win->history_flow_box));
+    update_delete_btn_sensitivity(win);
+
+    // Switch to screenshot tab
     GtkWidget* notebook = gtk_widget_get_ancestor(win->canvas, GTK_TYPE_NOTEBOOK);
     if (notebook) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 0);
     }
 
-    // Redraw canvas
     gtk_widget_queue_draw(win->canvas);
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Loaded image from history");
 }
 
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win) {
+    (void)win;
     // Create thumbnail
     GtkWidget* image = gtk_image_new_from_pixbuf(entry->thumbnail);
     gtk_widget_set_size_request(image, 200, 200);
-    
-    // Make the image clickable
+
+    // Wrap in event_box to store filepath (no click handler — flow box handles selection)
     GtkWidget* event_box = gtk_event_box_new();
     gtk_container_add(GTK_CONTAINER(event_box), image);
-    
-    // Store the filepath and window data
     safe_set_data_full(event_box, "filepath", g_strdup(entry->filepath), g_free, "create_history_item_widget");
-    
-    // Connect click event
-    g_signal_connect(event_box, "button-press-event", G_CALLBACK(on_history_item_clicked), win);
-    
+
     return event_box;
 }
 
@@ -3662,18 +3696,24 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_halign(history_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), history_page, history_label);
 
-    // History toolbar: Delete mode checkbox + Delete button
+    // History toolbar: image count + hint + delete button
     GtkWidget* history_toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_start(history_toolbar, 8);
     gtk_widget_set_margin_end(history_toolbar, 8);
     gtk_widget_set_margin_top(history_toolbar, 6);
     gtk_widget_set_margin_bottom(history_toolbar, 4);
 
-    GtkWidget* hint_label = gtk_label_new("Ctrl+Click to select images");
-    gtk_widget_set_opacity(hint_label, 0.5);
+    // Image count label (updated when history loads)
+    GtkWidget* count_label = gtk_label_new("0 images");
+    gtk_widget_set_halign(count_label, GTK_ALIGN_CENTER);
+    safe_set_data(win->window, "history-count-label", count_label, "main_window_init");
+    gtk_box_pack_start(GTK_BOX(history_toolbar), count_label, TRUE, TRUE, 0);
+
+    GtkWidget* hint_label = gtk_label_new("Ctrl+Click select  |  Shift+Click range  |  Delete key");
+    gtk_widget_set_opacity(hint_label, 0.4);
     gtk_box_pack_start(GTK_BOX(history_toolbar), hint_label, FALSE, FALSE, 0);
 
-    GtkWidget* delete_btn = gtk_button_new_with_label("Delete Selected");
+    GtkWidget* delete_btn = gtk_button_new_with_label("Delete");
     gtk_widget_set_sensitive(delete_btn, FALSE);
     safe_set_data(win->window, "delete-btn", delete_btn, "main_window_init");
     g_signal_connect(delete_btn, "clicked", G_CALLBACK(on_delete_selected_clicked), win);
@@ -3703,6 +3743,10 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_margin_top(flow_box, 5);
     gtk_widget_set_margin_bottom(flow_box, 5);
     gtk_container_add(GTK_CONTAINER(history_scroll), flow_box);
+
+    // Connect flow box signals — GTK handles Ctrl+Click and Shift+Click natively
+    g_signal_connect(flow_box, "selected-children-changed", G_CALLBACK(on_history_selection_changed), win);
+    g_signal_connect(flow_box, "child-activated", G_CALLBACK(on_history_child_activated), win);
     
     // Create statusbar
     win->statusbar = gtk_statusbar_new();
