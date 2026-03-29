@@ -73,6 +73,7 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
 static void on_delete_mode_toggled(GtkWidget* widget, gpointer data);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
+static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
 static void on_copy_button_clicked(GtkWidget* widget, gpointer data);
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key);
@@ -1286,19 +1287,59 @@ static void paste_from_clipboard(MainWindow* win, MainWindowData* win_data) {
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
 }
 
+// GDK event filter — intercepts key events BEFORE any GTK widget sees them
+static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data) {
+    (void)xevent;
+    if (!event || event->type != GDK_KEY_PRESS) return GDK_FILTER_CONTINUE;
+
+    GdkEventKey* key = (GdkEventKey*)event;
+    if (!(key->state & GDK_CONTROL_MASK)) return GDK_FILTER_CONTINUE;
+
+    MainWindow* win = (MainWindow*)data;
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "key_filter_func_global");
+    if (!win_data) return GDK_FILTER_CONTINUE;
+
+    switch (key->keyval) {
+        case GDK_KEY_s:
+            on_save_button_clicked(NULL, win);
+            return GDK_FILTER_REMOVE;
+        case GDK_KEY_c:
+            on_copy_button_clicked(NULL, win);
+            return GDK_FILTER_REMOVE;
+        case GDK_KEY_v:
+            paste_from_clipboard(win, win_data);
+            gtk_widget_grab_focus(win->canvas);
+            return GDK_FILTER_REMOVE;
+        case GDK_KEY_z:
+            undo_last_annotation(win_data);
+            gtk_widget_grab_focus(win->canvas);
+            return GDK_FILTER_REMOVE;
+        case GDK_KEY_n:
+            on_capture_button_clicked(NULL, win);
+            return GDK_FILTER_REMOVE;
+        default:
+            break;
+    }
+    return GDK_FILTER_CONTINUE;
+}
+
 static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer data) {
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_key_press");
 
     if (event->state & GDK_CONTROL_MASK) {
+        // Always handle app shortcuts, even when focus is on a spinbutton/entry/combo.
+        // We intercept before GTK's built-in text editing handlers.
         switch (event->keyval) {
             case GDK_KEY_z:  // Ctrl+Z: Undo
                 undo_last_annotation(win_data);
+                gtk_widget_grab_focus(win->canvas);
                 return TRUE;
 
             case GDK_KEY_v:  // Ctrl+V: Paste
                 paste_from_clipboard(win, win_data);
+                gtk_widget_grab_focus(win->canvas);
                 return TRUE;
 
             case GDK_KEY_c:  // Ctrl+C: Copy to clipboard
@@ -1666,11 +1707,18 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
 }
 
 static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
-    (void)event;  // Unused parameter
+    (void)event;
     MainWindow* win = (MainWindow*)data;
+
+    // If delete mode is active, don't open — let flow box handle selection
+    GtkWidget* delete_check = safe_get_data(win->window, "delete-mode-check", "on_history_item_clicked");
+    if (delete_check && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(delete_check))) {
+        return;  // Let GTK's flow box selection handle the click instead
+    }
+
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_history_item_clicked");
     const char* filepath = safe_get_data(widget, "filepath", "on_history_item_clicked");
-    
+
     // Load the image
     cairo_surface_t* surface = cairo_image_surface_create_from_png(filepath);
     if (!surface) {
@@ -2510,7 +2558,10 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
         PaletteClickData* upcd = g_new0(PaletteClickData, 1);
         upcd->win = win; upcd->tool_color_idx = 99; upcd->palette_idx = ci; upcd->grid = uni_inner;
         alloc_list = g_list_append(alloc_list, upcd);
-        g_signal_handlers_disconnect_by_func(child, G_CALLBACK(on_palette_color_clicked), NULL);
+        // Disconnect ALL handlers for on_palette_color_clicked regardless of data
+        guint n = g_signal_handlers_disconnect_matched(child,
+            G_SIGNAL_MATCH_FUNC, 0, 0, NULL, G_CALLBACK(on_palette_color_clicked), NULL);
+        (void)n;
         g_signal_connect(child, "button-press-event", G_CALLBACK(on_universal_color_clicked), upcd);
     }
     g_list_free(uni_children);
@@ -3299,9 +3350,12 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");
     
-    // Add key press event handling
+    // Add key press event handling — connect to window AND install a GDK event
+    // filter so shortcuts work even when spinbuttons/combos have focus
     gtk_widget_add_events(win->window, GDK_KEY_PRESS_MASK);
     g_signal_connect(win->window, "key-press-event", G_CALLBACK(on_key_press), win);
+    // Install GDK event filter for reliable Ctrl+key interception
+    gdk_window_add_filter(NULL, key_filter_func_global, win);
     
     // Initialize settings
     Settings* settings = g_new0(Settings, 1);
@@ -3607,6 +3661,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Register keyboard shortcut - use X11 grab for reliable interception
     register_shortcut_key(win, settings->shortcut_key);
     grab_printscreen_key(win, settings->shortcut_key);
+
+    // Store window pointer globally for accel callbacks
+    safe_set_data(win->window, "main-win-ptr", win, "main_window_init");
 
     // Show all widgets
     gtk_widget_show_all(win->window);

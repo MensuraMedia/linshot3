@@ -36,3 +36,6 @@
 | 2026-03-30T00:30:00-04:00 | fix: universal color now properly refreshes all tool palettes (was overwriting arrow grid) |
 | 2026-03-30T00:30:00-04:00 | feat: history page delete — checkbox enables multi-select, delete button removes from disk |
 | 2026-03-30T00:30:00-04:00 | fix: save-as dialog defaults to Settings screenshot path instead of original capture directory |
+| 2026-03-30T01:00:00-04:00 | fix: Ctrl+S/C/V/Z/N shortcuts now work globally via GDK event filter (not stolen by focused widgets) |
+| 2026-03-30T01:00:00-04:00 | fix: universal color now correctly disconnects old handlers and applies across all tool palettes |
+| 2026-03-30T01:00:00-04:00 | fix: history delete mode blocks image opening — click only selects for deletion until unchecked |
