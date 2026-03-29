@@ -108,7 +108,8 @@ static bool run_cmd(const char* cmd) {
 
 static bool cinnamon_unregister(void) {
     // Remove LinShot custom keybinding
-    run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['']\"");
+    run_cmd("dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/custom0/");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list '[]'");
     // Restore Cinnamon's built-in screenshot keys
     run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
     run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
@@ -120,24 +121,24 @@ static bool cinnamon_unregister(void) {
 static bool cinnamon_register(KeyBinding key, const char* exec_path) {
     char cmd[512];
 
-    // Ensure custom-list includes 'linshot'
-    run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-list \"['linshot']\"");
+    // Cinnamon expects custom-list entries as 'customN' (not arbitrary names)
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list \"['custom0']\"");
 
     // Set the binding
     const char* binding = keybinding_to_string(key);
     snprintf(cmd, sizeof(cmd),
-        "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['%s']\"",
+        "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/custom0/binding \"['%s']\"",
         binding);
     run_cmd(cmd);
 
     // Set the command
     snprintf(cmd, sizeof(cmd),
-        "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/command \"'%s --capture'\"",
+        "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/custom0/command \"'%s --capture'\"",
         exec_path);
     run_cmd(cmd);
 
     // Set the name
-    run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/name \"'LinShot Screenshot'\"");
+    run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/custom0/name \"'LinShot Screenshot'\"");
 
     // Disable ALL Cinnamon built-in screenshot handlers to avoid conflict
     // Must use gsettings (not dconf write) — Cinnamon reads from gsettings
