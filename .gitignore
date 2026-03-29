@@ -48,6 +48,12 @@ generate_icon.c
 # Runtime data
 linshot_recent_history/
 
+# Claude Code instruction sets (private)
+.claude/
+CLAUDE.md
+.claudeignore
+changelog.md
+
 # Other
 linshot
 screenshot_app
