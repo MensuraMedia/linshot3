@@ -33,3 +33,6 @@
 | 2026-03-30T00:10:00-04:00 | fix: desktop file — update Exec path to linshot binary, add absolute icon path for menu |
 | 2026-03-30T00:10:00-04:00 | chore: bump version to 1.2.0 — About page, CMakeLists, desktop files |
 | 2026-03-30T00:10:00-04:00 | docs: update About page description with new tools (border, blur, multi-paste, shadows) |
+| 2026-03-30T00:30:00-04:00 | fix: universal color now properly refreshes all tool palettes (was overwriting arrow grid) |
+| 2026-03-30T00:30:00-04:00 | feat: history page delete — checkbox enables multi-select, delete button removes from disk |
+| 2026-03-30T00:30:00-04:00 | fix: save-as dialog defaults to Settings screenshot path instead of original capture directory |

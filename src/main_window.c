@@ -71,6 +71,8 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
+static void on_delete_mode_toggled(GtkWidget* widget, gpointer data);
+static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
 static void on_copy_button_clicked(GtkWidget* widget, gpointer data);
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key);
@@ -1374,23 +1376,33 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
 // Generate a sequenced save filename from the original capture filename
 // e.g. /path/LinShot_20260328_120000.png -> /path/LinShot_20260328_120000_1.png
 static char* generate_save_filename(MainWindowData* win_data, MainWindow* win) {
+    Settings* settings = safe_get_data(win->window, "settings", "generate_save_filename");
     char* base = win_data->current_filename;
     if (!base) {
         // Fallback if no original filename tracked
         return generate_screenshot_filename(win);
     }
 
-    // Split at last '.' to insert _N before extension
-    char* dot = strrchr(base, '.');
+    // Use just the basename from the original file, combined with Settings path
+    char* basename = g_path_get_basename(base);
+    char* save_dir = (settings && settings->screenshot_path) ?
+                     settings->screenshot_path :
+                     (char*)g_get_user_special_dir(G_USER_DIRECTORY_PICTURES);
+
+    // Split basename at last '.' to insert _N before extension
+    char* dot = strrchr(basename, '.');
     if (!dot) {
-        return g_strdup_printf("%s_%d", base, win_data->save_sequence);
+        char* result = g_strdup_printf("%s/%s_%d", save_dir, basename, win_data->save_sequence);
+        g_free(basename);
+        return result;
     }
 
-    // Build: everything before dot + _N + extension
-    size_t prefix_len = (size_t)(dot - base);
-    char* prefix = g_strndup(base, prefix_len);
-    char* result = g_strdup_printf("%s_%d%s", prefix, win_data->save_sequence, dot);
-    g_free(prefix);
+    // Build: save_dir/name_N.ext
+    size_t prefix_len = (size_t)(dot - basename);
+    char* name_prefix = g_strndup(basename, prefix_len);
+    char* result = g_strdup_printf("%s/%s_%d%s", save_dir, name_prefix, win_data->save_sequence, dot);
+    g_free(name_prefix);
+    g_free(basename);
     return result;
 }
 
@@ -1703,6 +1715,81 @@ static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow*
     g_signal_connect(event_box, "button-press-event", G_CALLBACK(on_history_item_clicked), win);
     
     return event_box;
+}
+
+// --- History deletion support ---
+
+static void on_delete_mode_toggled(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+    GtkWidget* delete_btn = safe_get_data(win->window, "delete-btn", "on_delete_mode_toggled");
+    if (delete_btn) gtk_widget_set_sensitive(delete_btn, active);
+
+    // Toggle selection mode on flow box
+    if (win->history_flow_box) {
+        gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(win->history_flow_box),
+            active ? GTK_SELECTION_MULTIPLE : GTK_SELECTION_NONE);
+
+        // If disabling, clear all selections
+        if (!active) {
+            gtk_flow_box_unselect_all(GTK_FLOW_BOX(win->history_flow_box));
+        }
+    }
+}
+
+static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
+    (void)widget;
+    MainWindow* win = (MainWindow*)data;
+    if (!win->history_flow_box) return;
+
+    GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(win->history_flow_box));
+    if (!selected) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No images selected for deletion");
+        return;
+    }
+
+    // Confirm deletion
+    int count = g_list_length(selected);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Delete %d screenshot%s from disk?", count, count > 1 ? "s" : "");
+
+    GtkWidget* dialog = gtk_message_dialog_new(GTK_WINDOW(win->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        GTK_MESSAGE_WARNING, GTK_BUTTONS_YES_NO, "%s", msg);
+    gtk_window_set_title(GTK_WINDOW(dialog), "Confirm Deletion");
+    int response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    if (response != GTK_RESPONSE_YES) {
+        g_list_free(selected);
+        return;
+    }
+
+    // Delete files and remove from flow box
+    int deleted = 0;
+    for (GList* iter = selected; iter; iter = iter->next) {
+        GtkFlowBoxChild* child = GTK_FLOW_BOX_CHILD(iter->data);
+        GtkWidget* event_box = gtk_bin_get_child(GTK_BIN(child));
+        if (!event_box) continue;
+
+        const char* filepath = safe_get_data(event_box, "filepath", "on_delete_selected_clicked");
+        if (filepath && g_file_test(filepath, G_FILE_TEST_EXISTS)) {
+            if (g_unlink(filepath) == 0) {
+                deleted++;
+            }
+        }
+        gtk_widget_destroy(GTK_WIDGET(child));
+    }
+    g_list_free(selected);
+
+    // Uncheck delete mode
+    GtkWidget* delete_check = safe_get_data(win->window, "delete-mode-check", "on_delete_selected_clicked");
+    if (delete_check) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(delete_check), FALSE);
+    }
+
+    snprintf(msg, sizeof(msg), "%d screenshot%s deleted", deleted, deleted > 1 ? "s" : "");
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
 }
 
 static void create_settings_page(MainWindow* win, GtkWidget* notebook) {
@@ -2200,6 +2287,49 @@ static void refresh_all_tool_palettes(MainWindow* win) {
     }
 }
 
+// Refresh all individual tool section widgets from current Settings
+static void refresh_all_tool_widgets(MainWindow* win) {
+    Settings* settings = safe_get_data(win->window, "settings", "refresh_all_tool_widgets");
+    if (!settings) return;
+
+    // Refresh width spinbuttons (indices 0-4: arrow, box, circle, line, border)
+    for (int i = 0; i < 5; i++) {
+        char wkey[32];
+        snprintf(wkey, sizeof(wkey), "tool-width-spin-%d", i);
+        GtkWidget* spin = safe_get_data(win->window, wkey, "refresh_all_tool_widgets");
+        if (spin && GTK_IS_SPIN_BUTTON(spin)) {
+            g_signal_handlers_block_by_func(spin, G_CALLBACK(on_tool_width_changed), win);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), settings->tool_widths[i]);
+            g_signal_handlers_unblock_by_func(spin, G_CALLBACK(on_tool_width_changed), win);
+        }
+    }
+
+    // Refresh shadow checkboxes (indices 0-5: arrow, box, circle, text, line, border)
+    for (int i = 0; i < 6; i++) {
+        char skey[32];
+        snprintf(skey, sizeof(skey), "tool-shadow-check-%d", i);
+        GtkWidget* check = safe_get_data(win->window, skey, "refresh_all_tool_widgets");
+        if (check && GTK_IS_TOGGLE_BUTTON(check)) {
+            g_signal_handlers_block_by_func(check, G_CALLBACK(on_shadow_toggled), win);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), settings->tool_shadow[i]);
+            g_signal_handlers_unblock_by_func(check, G_CALLBACK(on_shadow_toggled), win);
+        }
+
+        // Refresh shadow intensity scales
+        char ikey[32];
+        snprintf(ikey, sizeof(ikey), "tool-shadow-scale-%d", i);
+        GtkWidget* scale = safe_get_data(win->window, ikey, "refresh_all_tool_widgets");
+        if (scale && GTK_IS_RANGE(scale)) {
+            g_signal_handlers_block_by_func(scale, G_CALLBACK(on_shadow_intensity_changed), win);
+            gtk_range_set_value(GTK_RANGE(scale), settings->tool_shadow_intensity[i]);
+            g_signal_handlers_unblock_by_func(scale, G_CALLBACK(on_shadow_intensity_changed), win);
+        }
+    }
+
+    // Refresh all color palette grids
+    refresh_all_tool_palettes(win);
+}
+
 // Callback: Universal Settings apply to all tools
 static void on_universal_color_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
     (void)widget; (void)event;
@@ -2215,10 +2345,10 @@ static void on_universal_color_clicked(GtkWidget* widget, GdkEventButton* event,
     if (win_data) {
         win_data->current_tool.color = palette_colors[pcd->palette_idx];
     }
-    // Refresh the universal palette check marks
-    update_palette_checks(pcd->grid, pcd->tool_color_idx, pcd->win);
-    // Refresh ALL individual tool palettes
-    refresh_all_tool_palettes(pcd->win);
+    // Refresh the universal palette check marks (use index 0 for matching since all are the same now)
+    update_palette_checks(pcd->grid, 0, pcd->win);
+    // Refresh ALL individual tool widgets (colors, widths, shadows)
+    refresh_all_tool_widgets(pcd->win);
 }
 
 static void on_universal_width_changed(GtkWidget* widget, gpointer data) {
@@ -2230,6 +2360,7 @@ static void on_universal_width_changed(GtkWidget* widget, gpointer data) {
     for (int i = 0; i < 5; i++) settings->tool_widths[i] = val;
     save_settings(settings);
     if (win_data) win_data->current_tool.line_width = val;
+    refresh_all_tool_widgets(win);
 }
 
 static void on_universal_shadow_toggled(GtkWidget* widget, gpointer data) {
@@ -2241,6 +2372,7 @@ static void on_universal_shadow_toggled(GtkWidget* widget, gpointer data) {
     for (int i = 0; i < 6; i++) settings->tool_shadow[i] = active;
     save_settings(settings);
     if (win_data) win_data->current_tool.shadow = active;
+    refresh_all_tool_widgets(win);
 }
 
 static void on_universal_shadow_intensity_changed(GtkWidget* widget, gpointer data) {
@@ -2252,6 +2384,7 @@ static void on_universal_shadow_intensity_changed(GtkWidget* widget, gpointer da
     for (int i = 0; i < 6; i++) settings->tool_shadow_intensity[i] = val;
     save_settings(settings);
     if (win_data) win_data->current_tool.shadow_intensity = val;
+    refresh_all_tool_widgets(win);
 }
 
 // Helper: create a tool section (color circles + width + shadow) in compact form
@@ -2287,6 +2420,11 @@ static GtkWidget* create_tool_section(const char* name, int color_idx, int width
         gtk_box_pack_start(GTK_BOX(opts_row), wlabel, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(opts_row), wspin, FALSE, FALSE, 0);
 
+        // Store widget reference for universal refresh
+        char wkey[32];
+        snprintf(wkey, sizeof(wkey), "tool-width-spin-%d", width_idx);
+        safe_set_data(win->window, wkey, wspin, "create_tool_section");
+
         // Shadow toggle + intensity slider on same row
         GtkWidget* shadow_check = gtk_check_button_new_with_label("Shadow");
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(shadow_check),
@@ -2295,6 +2433,11 @@ static GtkWidget* create_tool_section(const char* name, int color_idx, int width
         g_signal_connect(shadow_check, "toggled", G_CALLBACK(on_shadow_toggled), win);
         gtk_box_pack_start(GTK_BOX(opts_row), shadow_check, FALSE, FALSE, 4);
 
+        // Store shadow check reference
+        char skey[32];
+        snprintf(skey, sizeof(skey), "tool-shadow-check-%d", shadow_idx);
+        safe_set_data(win->window, skey, shadow_check, "create_tool_section");
+
         GtkWidget* int_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.1);
         gtk_scale_set_draw_value(GTK_SCALE(int_scale), FALSE);
         gtk_widget_set_size_request(int_scale, 70, -1);
@@ -2302,6 +2445,11 @@ static GtkWidget* create_tool_section(const char* name, int color_idx, int width
                             settings ? settings->tool_shadow_intensity[shadow_idx] : 0.4);
         g_object_set_data(G_OBJECT(int_scale), "shadow-idx", GINT_TO_POINTER(shadow_idx));
         g_signal_connect(int_scale, "value-changed", G_CALLBACK(on_shadow_intensity_changed), win);
+
+        // Store shadow scale reference
+        char ikey[32];
+        snprintf(ikey, sizeof(ikey), "tool-shadow-scale-%d", shadow_idx);
+        safe_set_data(win->window, ikey, int_scale, "create_tool_section");
         gtk_box_pack_start(GTK_BOX(opts_row), int_scale, TRUE, TRUE, 0);
 
         gtk_box_pack_start(GTK_BOX(section), opts_row, FALSE, FALSE, 0);
@@ -2350,7 +2498,8 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
     g_object_set_data(G_OBJECT(uni_check), "uni-controls", uni_controls);
     g_signal_connect(uni_check, "toggled", G_CALLBACK(on_universal_check_toggled), NULL);
 
-    GtkWidget* uni_color = create_tool_color_section(NULL, 0, win, &alloc_list);
+    // Use index 99 so it doesn't overwrite any real tool grid (0-5)
+    GtkWidget* uni_color = create_tool_color_section(NULL, 99, win, &alloc_list);
     GtkWidget* uni_inner = gtk_bin_get_child(GTK_BIN(uni_color));
     g_object_ref(uni_inner);
     gtk_container_remove(GTK_CONTAINER(uni_color), uni_inner);
@@ -2359,7 +2508,7 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
         GtkWidget* child = GTK_WIDGET(l->data);
         int ci = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child), "palette-idx"));
         PaletteClickData* upcd = g_new0(PaletteClickData, 1);
-        upcd->win = win; upcd->tool_color_idx = 0; upcd->palette_idx = ci; upcd->grid = uni_inner;
+        upcd->win = win; upcd->tool_color_idx = 99; upcd->palette_idx = ci; upcd->grid = uni_inner;
         alloc_list = g_list_append(alloc_list, upcd);
         g_signal_handlers_disconnect_by_func(child, G_CALLBACK(on_palette_color_clicked), NULL);
         g_signal_connect(child, "button-press-event", G_CALLBACK(on_universal_color_clicked), upcd);
@@ -2503,12 +2652,14 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
     g_signal_connect(tsc2, "toggled", G_CALLBACK(on_shadow_toggled), win);
     g_signal_connect(tsc2, "toggled", G_CALLBACK(on_text_font_changed), win);
     g_object_set_data(G_OBJECT(tsc2), "font-key", (gpointer)"shadow-refresh");
+    safe_set_data(win->window, "tool-shadow-check-3", tsc2, "create_colors_page");
     GtkWidget* tss = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.1);
     gtk_scale_set_draw_value(GTK_SCALE(tss), FALSE);
     gtk_widget_set_size_request(tss, 80, -1);
     gtk_range_set_value(GTK_RANGE(tss), settings ? settings->tool_shadow_intensity[3] : 0.4);
     g_object_set_data(G_OBJECT(tss), "shadow-idx", GINT_TO_POINTER(3));
     g_signal_connect(tss, "value-changed", G_CALLBACK(on_shadow_intensity_changed), win);
+    safe_set_data(win->window, "tool-shadow-scale-3", tss, "create_colors_page");
     gtk_box_pack_start(GTK_BOX(tsr), tsc2, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(tsr), tss, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(text_sec), tsr, FALSE, FALSE, 2);
@@ -3384,7 +3535,27 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     GtkWidget* history_label = gtk_label_new("History");
     gtk_widget_set_halign(history_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), history_page, history_label);
-    
+
+    // History toolbar: Delete mode checkbox + Delete button
+    GtkWidget* history_toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_start(history_toolbar, 8);
+    gtk_widget_set_margin_end(history_toolbar, 8);
+    gtk_widget_set_margin_top(history_toolbar, 6);
+    gtk_widget_set_margin_bottom(history_toolbar, 4);
+
+    GtkWidget* delete_mode_check = gtk_check_button_new_with_label("Select for deletion");
+    safe_set_data(win->window, "delete-mode-check", delete_mode_check, "main_window_init");
+    gtk_box_pack_start(GTK_BOX(history_toolbar), delete_mode_check, FALSE, FALSE, 0);
+
+    GtkWidget* delete_btn = gtk_button_new_with_label("Delete Selected");
+    gtk_widget_set_sensitive(delete_btn, FALSE);
+    safe_set_data(win->window, "delete-btn", delete_btn, "main_window_init");
+    g_signal_connect(delete_mode_check, "toggled", G_CALLBACK(on_delete_mode_toggled), win);
+    g_signal_connect(delete_btn, "clicked", G_CALLBACK(on_delete_selected_clicked), win);
+    gtk_box_pack_start(GTK_BOX(history_toolbar), delete_btn, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(history_page), history_toolbar, FALSE, FALSE, 0);
+
     // Create scrolled window for history
     GtkWidget* history_scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(history_scroll),
