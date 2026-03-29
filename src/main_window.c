@@ -3743,6 +3743,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_margin_bottom(flow_box, 5);
     gtk_container_add(GTK_CONTAINER(history_scroll), flow_box);
 
+    // Double-click to open, single-click to select
+    gtk_flow_box_set_activate_on_single_click(GTK_FLOW_BOX(flow_box), FALSE);
+
     // Connect flow box signals — GTK handles Ctrl+Click and Shift+Click natively
     g_signal_connect(flow_box, "selected-children-changed", G_CALLBACK(on_history_selection_changed), win);
     g_signal_connect(flow_box, "child-activated", G_CALLBACK(on_history_child_activated), win);
