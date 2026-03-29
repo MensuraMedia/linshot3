@@ -7,6 +7,28 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 
 ## Screenshots
 
+### Sidebar — 16 Tools at a Glance
+<img src="screenshots/linshot_00a_sidebar.png" alt="Sidebar Tools" width="300">
+
+The sidebar provides instant access to every tool in LinShot:
+
+- **LinShot** — Capture a new screenshot (area selection with crosshair)
+- **Line** — Draw straight lines with configurable width and color
+- **Arrow** — Draw filled arrows (Shift+drag snaps to 45° angles)
+- **Box** — Draw rectangles (Ctrl+drag constrains to square)
+- **Circle** — Draw ellipses (Ctrl+drag constrains to circle)
+- **Text** — Place text annotations with font, size, bold, and italic
+- **Select** — Marquee selection with dashed border for copy/paste/delete
+- **Flatten** — Commit all overlays and annotations permanently into the image
+- **Copy** — Copy the image or current selection to clipboard
+- **Border** — Draw decorative double-border frames
+- **Blur** — Pixelate/mosaic a region to redact sensitive content
+- **Crop** — Draw a crop region with live preview and dimensions
+- **Resize** — Resize by percentage or exact pixel dimensions
+- **Rotate** — Rotate 90°/180° or flip horizontal/vertical
+- **Bright** — Adjust brightness, contrast, grayscale, or invert colors in real time
+- **Save** — Save the image with all annotations applied
+
 ### Image Tab — Screenshot Editor
 <img src="screenshots/linshot_01_main.png" alt="Image Tab" width="800">
 
