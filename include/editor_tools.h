@@ -11,7 +11,8 @@ typedef enum {
     TOOL_RECTANGLE,
     TOOL_ELLIPSE,
     TOOL_TEXT,
-    TOOL_FREEHAND
+    TOOL_FREEHAND,
+    TOOL_MARQUEE
 } ToolType;
 
 // Font settings for text tool

@@ -16,6 +16,8 @@ typedef enum {
     ICON_BOX,
     ICON_CIRCLE,
     ICON_TEXT,
+    ICON_SELECT,
+    ICON_FLATTEN,
     ICON_COPY,
     ICON_SAVE,
     ICON_COUNT

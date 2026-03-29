@@ -198,7 +198,39 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
                 cairo_stroke(cr);
             }
             break;
-            
+
+        case TOOL_MARQUEE:
+            {
+                double x = MIN(annotation->bounds.x1, annotation->bounds.x2);
+                double y = MIN(annotation->bounds.y1, annotation->bounds.y2);
+                double w = abs(annotation->bounds.x2 - annotation->bounds.x1);
+                double h = abs(annotation->bounds.y2 - annotation->bounds.y1);
+
+                cairo_save(cr);
+
+                // Force sharp corners and clean state
+                cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+                cairo_set_dash(cr, NULL, 0, 0);
+
+                // Black solid underlay for contrast
+                cairo_set_line_width(cr, 2.0);
+                cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.8);
+                cairo_rectangle(cr, x + 0.5, y + 0.5, w, h);
+                cairo_stroke(cr);
+
+                // White dashes on top
+                double dashes[] = {6.0, 4.0};
+                cairo_set_dash(cr, dashes, 2, 0);
+                cairo_set_line_width(cr, 1.5);
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+                cairo_rectangle(cr, x + 0.5, y + 0.5, w, h);
+                cairo_stroke(cr);
+
+                cairo_restore(cr);
+            }
+            break;
+
         default:
             break;
     }

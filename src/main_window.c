@@ -59,6 +59,7 @@ static void register_shortcut_key(MainWindow* win, ShortcutKey key);
 static GdkFilterReturn key_filter_func(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surface, GList* annotations, const char* filename);
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
+static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key);
 
 // Preprocessing function to validate GTK objects
@@ -537,7 +538,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         win_data->current_tool.type = tool_id;
         
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -609,7 +610,36 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
                 annotation_free(current);
             }
         }
-        
+
+        // Draw paste overlay if present
+        if (win_data->paste_overlay) {
+            cairo_set_source_surface(image_cr, win_data->paste_overlay,
+                                     win_data->paste_x, win_data->paste_y);
+            cairo_paint(image_cr);
+
+            // Draw border around paste overlay so user can see it
+            int pw = cairo_image_surface_get_width(win_data->paste_overlay);
+            int ph = cairo_image_surface_get_height(win_data->paste_overlay);
+            cairo_save(image_cr);
+            cairo_set_line_join(image_cr, CAIRO_LINE_JOIN_MITER);
+            cairo_set_line_cap(image_cr, CAIRO_LINE_CAP_BUTT);
+            double dashes[] = {4.0, 3.0};
+            cairo_set_dash(image_cr, dashes, 2, 0);
+            cairo_set_line_width(image_cr, 1.5);
+            cairo_set_source_rgba(image_cr, 0.2, 0.6, 1.0, 0.9);
+            cairo_rectangle(image_cr, win_data->paste_x + 0.5, win_data->paste_y + 0.5, pw, ph);
+            cairo_stroke(image_cr);
+            cairo_restore(image_cr);
+        }
+
+        // Draw persistent marquee selection
+        if (win_data->has_marquee) {
+            Annotation marq = {0};
+            marq.type = TOOL_MARQUEE;
+            marq.bounds = win_data->marquee_bounds;
+            annotation_draw(&marq, image_cr);
+        }
+
         // Draw the combined image and annotations to the widget
         cairo_set_source_surface(cr, image_surface, 0, 0);
         cairo_paint(cr);
@@ -688,7 +718,26 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_button_press");
     
     if (event->button == 1) {  // Left mouse button
-        // First, check if we're clicking on an existing text annotation
+        // Check if clicking on the paste overlay
+        if (win_data->paste_overlay) {
+            int pw = cairo_image_surface_get_width(win_data->paste_overlay);
+            int ph = cairo_image_surface_get_height(win_data->paste_overlay);
+            if (event->x >= win_data->paste_x && event->x <= win_data->paste_x + pw &&
+                event->y >= win_data->paste_y && event->y <= win_data->paste_y + ph) {
+                win_data->dragging_paste = true;
+                win_data->paste_drag_ox = event->x - win_data->paste_x;
+                win_data->paste_drag_oy = event->y - win_data->paste_y;
+                gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Dragging pasted image - click Flatten when positioned");
+                return TRUE;
+            }
+        }
+
+        // Clear marquee when starting a new drawing action
+        if (win_data->current_tool.type != TOOL_NONE) {
+            win_data->has_marquee = false;
+        }
+
+        // Check if clicking on an existing text annotation
         Annotation* text_annotation = find_text_at_coords(win_data, event->x, event->y);
         if (text_annotation) {
             win_data->selected_text = text_annotation;
@@ -697,7 +746,7 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
             gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Text selected - drag to move");
             return TRUE;
         }
-        
+
         // If not clicking text, handle normal tool operations
         if (win_data->current_tool.type == TOOL_TEXT) {
             // Deselect any selected text when creating new text
@@ -721,7 +770,11 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_motion_notify");
     
-    if (win_data->selected_text) {
+    if (win_data->dragging_paste && win_data->paste_overlay) {
+        win_data->paste_x = event->x - win_data->paste_drag_ox;
+        win_data->paste_y = event->y - win_data->paste_drag_oy;
+        gtk_widget_queue_draw(win->canvas);
+    } else if (win_data->selected_text) {
         // Update text position while dragging
         double new_x = event->x - win_data->drag_start_x;
         double new_y = event->y - win_data->drag_start_y;
@@ -750,21 +803,83 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_button_release");
     
     if (event->button == 1) {
-        if (win_data->selected_text) {
+        if (win_data->dragging_paste) {
+            win_data->dragging_paste = false;
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste positioned - click Flatten to commit");
+        } else if (win_data->selected_text) {
             // Finish moving text
             win_data->selected_text = NULL;
             gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Text moved");
         } else if (win_data->drawing) {
             win_data->drawing = false;
-            
-            // Create and add new annotation
-            Annotation* annotation = annotation_create(win_data->current_tool.type, &win_data->current_tool);
-            if (annotation) {
-                annotation->bounds = win_data->start_point;
-                win_data->annotations = g_list_append(win_data->annotations, annotation);
+
+            if (win_data->current_tool.type == TOOL_MARQUEE) {
+                // Marquee tool: store selection and copy region to clipboard
+                if (win_data->current_image) {
+                    int x = MIN(win_data->start_point.x1, win_data->start_point.x2);
+                    int y = MIN(win_data->start_point.y1, win_data->start_point.y2);
+                    int w = abs(win_data->start_point.x2 - win_data->start_point.x1);
+                    int h = abs(win_data->start_point.y2 - win_data->start_point.y1);
+
+                    if (w > 1 && h > 1) {
+                        int img_w = cairo_image_surface_get_width(win_data->current_image);
+                        int img_h = cairo_image_surface_get_height(win_data->current_image);
+
+                        // Clamp to image bounds
+                        if (x < 0) x = 0;
+                        if (y < 0) y = 0;
+                        if (x + w > img_w) w = img_w - x;
+                        if (y + h > img_h) h = img_h - y;
+
+                        // Store marquee selection persistently
+                        win_data->has_marquee = true;
+                        win_data->marquee_bounds.x1 = x;
+                        win_data->marquee_bounds.y1 = y;
+                        win_data->marquee_bounds.x2 = x + w;
+                        win_data->marquee_bounds.y2 = y + h;
+
+                        // Create surface with selected region + annotations
+                        cairo_surface_t* region = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+                        cairo_t* rcr = cairo_create(region);
+
+                        cairo_set_source_surface(rcr, win_data->current_image, -x, -y);
+                        cairo_paint(rcr);
+
+                        for (GList* iter = win_data->annotations; iter; iter = iter->next) {
+                            cairo_save(rcr);
+                            cairo_translate(rcr, -x, -y);
+                            annotation_draw((Annotation*)iter->data, rcr);
+                            cairo_restore(rcr);
+                        }
+
+                        cairo_surface_flush(region);
+
+                        // Copy to clipboard
+                        GdkPixbuf* pb = gdk_pixbuf_get_from_surface(region, 0, 0, w, h);
+                        if (pb) {
+                            GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+                            gtk_clipboard_set_image(clipboard, pb);
+                            g_object_unref(pb);
+                        }
+
+                        cairo_destroy(rcr);
+                        cairo_surface_destroy(region);
+
+                        char msg[80];
+                        snprintf(msg, sizeof(msg), "Selected %dx%d - copied to clipboard (Ctrl+V to paste)", w, h);
+                        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+                    }
+                }
+                gtk_widget_queue_draw(win->canvas);
+            } else {
+                // Normal tool: create and add new annotation
+                Annotation* annotation = annotation_create(win_data->current_tool.type, &win_data->current_tool);
+                if (annotation) {
+                    annotation->bounds = win_data->start_point;
+                    win_data->annotations = g_list_append(win_data->annotations, annotation);
+                }
+                gtk_widget_queue_draw(win->canvas);
             }
-            
-            gtk_widget_queue_draw(win->canvas);
         }
     }
     
@@ -790,18 +905,131 @@ static void undo_last_annotation(MainWindowData* win_data) {
     gtk_widget_queue_draw(win_data->win.canvas);
 }
 
+static void flatten_paste_overlay(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->paste_overlay || !win_data->current_image) return;
+
+    int img_w = cairo_image_surface_get_width(win_data->current_image);
+    int img_h = cairo_image_surface_get_height(win_data->current_image);
+
+    cairo_surface_t* combined = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, img_w, img_h);
+    cairo_t* cr = cairo_create(combined);
+
+    // Draw existing image
+    cairo_set_source_surface(cr, win_data->current_image, 0, 0);
+    cairo_paint(cr);
+
+    // Draw existing annotations
+    for (GList* iter = win_data->annotations; iter; iter = iter->next) {
+        annotation_draw((Annotation*)iter->data, cr);
+    }
+
+    // Draw paste overlay at its current position
+    cairo_set_source_surface(cr, win_data->paste_overlay, win_data->paste_x, win_data->paste_y);
+    cairo_paint(cr);
+
+    cairo_destroy(cr);
+
+    // Replace current image
+    cairo_surface_destroy(win_data->current_image);
+    win_data->current_image = combined;
+
+    // Clear annotations and overlay (annotations are baked in)
+    g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
+    win_data->annotations = NULL;
+    g_list_free_full(win_data->undo_stack, (GDestroyNotify)annotation_free);
+    win_data->undo_stack = NULL;
+
+    cairo_surface_destroy(win_data->paste_overlay);
+    win_data->paste_overlay = NULL;
+    win_data->has_marquee = false;
+
+    gtk_widget_queue_draw(win->canvas);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste flattened into image");
+}
+
+static void on_flatten_button_clicked(GtkWidget* widget, gpointer data) {
+    (void)widget;
+    MainWindow* win = (MainWindow*)data;
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_flatten_button_clicked");
+    if (win_data) {
+        flatten_paste_overlay(win, win_data);
+    }
+}
+
+static void paste_from_clipboard(MainWindow* win, MainWindowData* win_data) {
+    GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    GdkPixbuf* pb = gtk_clipboard_wait_for_image(clipboard);
+    if (!pb) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image in clipboard to paste");
+        return;
+    }
+
+    int paste_w = gdk_pixbuf_get_width(pb);
+    int paste_h = gdk_pixbuf_get_height(pb);
+
+    // Free any existing paste overlay
+    if (win_data->paste_overlay) {
+        cairo_surface_destroy(win_data->paste_overlay);
+    }
+
+    // Create a cairo surface from the pixbuf
+    win_data->paste_overlay = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, paste_w, paste_h);
+    cairo_t* cr = cairo_create(win_data->paste_overlay);
+    gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+
+    // Position at center of current image (or at origin if no image)
+    if (win_data->current_image) {
+        int img_w = cairo_image_surface_get_width(win_data->current_image);
+        int img_h = cairo_image_surface_get_height(win_data->current_image);
+        win_data->paste_x = (img_w - paste_w) / 2.0;
+        win_data->paste_y = (img_h - paste_h) / 2.0;
+        if (win_data->paste_x < 0) win_data->paste_x = 0;
+        if (win_data->paste_y < 0) win_data->paste_y = 0;
+    } else {
+        // No image - create a canvas from the paste
+        win_data->current_image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, paste_w, paste_h);
+        cairo_t* bgcr = cairo_create(win_data->current_image);
+        cairo_set_source_rgb(bgcr, 1.0, 1.0, 1.0);
+        cairo_paint(bgcr);
+        cairo_destroy(bgcr);
+        win_data->paste_x = 0;
+        win_data->paste_y = 0;
+    }
+
+    win_data->dragging_paste = false;
+    win_data->has_marquee = false;
+
+    g_object_unref(pb);
+
+    // Switch to Screenshot tab
+    GtkWidget* notebook = gtk_widget_get_ancestor(win->canvas, GTK_TYPE_NOTEBOOK);
+    if (notebook) {
+        gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 0);
+    }
+
+    gtk_widget_queue_draw(win->canvas);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Pasted - drag to position, then click Flatten");
+}
+
 static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer data) {
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_key_press");
-    
-    // Check for Ctrl+Z
-    if ((event->state & GDK_CONTROL_MASK) && event->keyval == GDK_KEY_z) {
-        undo_last_annotation(win_data);
-        return TRUE;  // Event handled
+
+    if (event->state & GDK_CONTROL_MASK) {
+        if (event->keyval == GDK_KEY_z) {
+            undo_last_annotation(win_data);
+            return TRUE;
+        }
+        if (event->keyval == GDK_KEY_v) {
+            paste_from_clipboard(win, win_data);
+            return TRUE;
+        }
     }
-    
-    return FALSE;  // Event not handled
+
+    return FALSE;
 }
 
 // Generate a sequenced save filename from the original capture filename
@@ -1855,6 +2083,13 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     data->drag_start_y = 0;
     data->current_filename = NULL;
     data->save_sequence = 1;
+    data->has_marquee = false;
+    data->paste_overlay = NULL;
+    data->paste_x = 0;
+    data->paste_y = 0;
+    data->dragging_paste = false;
+    data->paste_drag_ox = 0;
+    data->paste_drag_oy = 0;
 
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");
@@ -1914,11 +2149,26 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_box_pack_start(GTK_BOX(sidebar_container), buttons_container, TRUE, TRUE, 0);
 
     // Create buttons with icons and labels
+    // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "Shot", "Arrow", "Box", "Circle", "Text", "Copy", "Save"
+        "Shot", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
+    };
+    // Button type: 't'=tool, 'a'=action
+    // For tools, store the ToolType enum value
+    typedef struct { char type; int id; } BtnDef;
+    BtnDef button_defs[] = {
+        {'a', 0},               // 0: Shot
+        {'t', TOOL_ARROW},      // 1: Arrow
+        {'t', TOOL_RECTANGLE},  // 2: Box
+        {'t', TOOL_ELLIPSE},    // 3: Circle
+        {'t', TOOL_TEXT},       // 4: Text
+        {'t', TOOL_MARQUEE},    // 5: Select
+        {'a', 1},               // 6: Flatten
+        {'a', 2},               // 7: Copy
+        {'a', 3}                // 8: Save
     };
 
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 9; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -1945,16 +2195,18 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
         gtk_style_context_add_class(button_context, "sidebar-button");
 
-        // Connect signals based on button type
-        if (i == 0) { // ScreenShot button
-            g_signal_connect(button, "clicked", G_CALLBACK(on_capture_button_clicked), win);
-        } else if (i == 5) { // Copy button
-            g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 6) { // Save button
-            g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
-        } else { // Tool buttons
-            safe_set_data(button, "tool-id", GINT_TO_POINTER(i), "main_window_init");
+        // Connect signals
+        if (button_defs[i].type == 't') {
+            safe_set_data(button, "tool-id", GINT_TO_POINTER(button_defs[i].id), "main_window_init");
             g_signal_connect(button, "clicked", G_CALLBACK(on_tool_button_clicked), win);
+        } else if (i == 0) {
+            g_signal_connect(button, "clicked", G_CALLBACK(on_capture_button_clicked), win);
+        } else if (i == 6) { // Flatten
+            g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
+        } else if (i == 7) { // Copy
+            g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
+        } else if (i == 8) { // Save
+            g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
         gtk_box_pack_start(GTK_BOX(buttons_container), button, FALSE, FALSE, 0);
@@ -2104,6 +2356,12 @@ void main_window_cleanup(MainWindow* win) {
             // Free filename tracking
             g_free(data->current_filename);
             data->current_filename = NULL;
+
+            // Free paste overlay
+            if (data->paste_overlay) {
+                cairo_surface_destroy(data->paste_overlay);
+                data->paste_overlay = NULL;
+            }
 
             // Free both annotations list and undo stack
             g_list_free_full(data->annotations, (GDestroyNotify)annotation_free);

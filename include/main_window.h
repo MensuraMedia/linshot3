@@ -31,6 +31,16 @@ typedef struct {
     bool capture_on_ready;     // Auto-capture after window is ready
     char* current_filename;    // Original capture filename (for save-as sequencing)
     int save_sequence;         // Next _N suffix for save
+    // Marquee selection state
+    bool has_marquee;          // Whether a marquee selection is active
+    PointPair marquee_bounds;  // Marquee selection rectangle
+    // Paste overlay state
+    cairo_surface_t* paste_overlay;  // Pasted image floating on canvas
+    double paste_x;            // Overlay position
+    double paste_y;
+    bool dragging_paste;       // Currently dragging the paste overlay
+    double paste_drag_ox;      // Drag offset from overlay origin
+    double paste_drag_oy;
 } MainWindowData;
 
 // Initialize and show the main window

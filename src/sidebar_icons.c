@@ -1,5 +1,6 @@
 #include "sidebar_icons.h"
 #include <math.h>
+#include <stddef.h>
 
 // All coordinates are normalized to a 20x20 grid.
 // If SIDEBAR_ICON_SIZE changes, icons scale proportionally.
@@ -109,6 +110,55 @@ static void draw_copy(cairo_t* cr, double x, double y) {
     cairo_stroke(cr);
 }
 
+static void draw_select(cairo_t* cr, double x, double y) {
+    // Dashed rectangle (marquee selection icon)
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    double dashes[] = {3.0, 2.0};
+    cairo_set_dash(cr, dashes, 2, 0);
+    cairo_rectangle(cr, x+S(3), y+S(3), S(14), S(14));
+    cairo_stroke(cr);
+    cairo_set_dash(cr, NULL, 0, 0);
+
+    // Small crosshair cursor in lower-right corner
+    cairo_set_line_width(cr, 1.2);
+    cairo_move_to(cr, x+S(14), y+S(12));
+    cairo_line_to(cr, x+S(14), y+S(18));
+    cairo_stroke(cr);
+    cairo_move_to(cr, x+S(11), y+S(15));
+    cairo_line_to(cr, x+S(17), y+S(15));
+    cairo_stroke(cr);
+}
+
+static void draw_flatten(cairo_t* cr, double x, double y) {
+    // Two layers merging into one (flatten icon)
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    // Back layer
+    cairo_rectangle(cr, x+S(2), y+S(2), S(10), S(8));
+    cairo_stroke(cr);
+
+    // Front layer
+    cairo_rectangle(cr, x+S(8), y+S(8), S(10), S(8));
+    cairo_stroke(cr);
+
+    // Downward arrow between them
+    cairo_set_line_width(cr, 1.5);
+    cairo_move_to(cr, x+S(10), y+S(5));
+    cairo_line_to(cr, x+S(10), y+S(13));
+    cairo_stroke(cr);
+    cairo_move_to(cr, x+S(7.5), y+S(11));
+    cairo_line_to(cr, x+S(10), y+S(14));
+    cairo_line_to(cr, x+S(12.5), y+S(11));
+    cairo_stroke(cr);
+}
+
 static void draw_save(cairo_t* cr, double x, double y) {
     // SET 2 save icon: download arrow into tray
     double lw = SIDEBAR_ICON_STROKE;
@@ -144,6 +194,8 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_box,
     draw_circle,
     draw_text,
+    draw_select,
+    draw_flatten,
     draw_copy,
     draw_save
 };
