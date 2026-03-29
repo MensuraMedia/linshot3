@@ -26,13 +26,13 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 ## Screenshots
 
 ### Main View
-![Main View](screenshots/Screenshot1.png?v=2)
+<img src="screenshots/Screenshot1.png" alt="Main View" width="800">
 
 ### Screenshot History
-![Screenshot History](screenshots/Screenshot2.png?v=2)
+<img src="screenshots/Screenshot2.png" alt="Screenshot History" width="800">
 
 ### Annotation Tools
-![Annotation Tools](screenshots/Screenshot3.png?v=2)
+<img src="screenshots/Screenshot3.png" alt="Annotation Tools" width="800">
 
 ## Installation
 
@@ -43,8 +43,8 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev
 
 # Build
-git clone https://github.com/MensuraMedia/linshot.git
-cd linshot
+git clone https://github.com/MensuraMedia/linshot3.git
+cd linshot3
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make
@@ -91,4 +91,4 @@ See [LICENSE](LICENSE) for details.
 
 ## Repository
 
-[github.com/MensuraMedia/linshot](https://github.com/MensuraMedia/linshot)
+[github.com/MensuraMedia/linshot3](https://github.com/MensuraMedia/linshot3)
