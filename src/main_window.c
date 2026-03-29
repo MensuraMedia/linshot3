@@ -15,6 +15,11 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 
+// Wrapper to suppress warn_unused_result for system() calls
+static inline void run_cmd(const char* cmd) {
+    if (system(cmd) == -1) { /* intentionally ignored */ }
+}
+
 typedef enum {
     FILENAME_LINSHOT_NUMBER = 0,
     FILENAME_SCREENSHOT_NUMBER,
@@ -44,6 +49,7 @@ typedef struct {
 static char* get_binary_path(void);
 static void toggle_autostart(bool enable);
 static void toggle_default_screenshot_app(bool enable);
+static bool is_desktop_env(const char* name);
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win);
 static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data);
 static void on_browse_clicked(GtkWidget* widget, gpointer data);
@@ -465,13 +471,24 @@ static void on_capture_button_clicked(GtkWidget* widget, gpointer data) {
     // Clear existing annotations
     g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
     win_data->annotations = NULL;
-    
+
+    // Track original filename for save sequencing
+    g_free(win_data->current_filename);
+    win_data->current_filename = g_strdup(filename);
+    win_data->save_sequence = 1;
+
     // Copy to clipboard
     copy_to_clipboard(win, bordered_surface, NULL);
-    
+
+    // Switch to Screenshot tab so user sees the latest capture
+    GtkWidget* notebook = gtk_widget_get_ancestor(win->canvas, GTK_TYPE_NOTEBOOK);
+    if (notebook) {
+        gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 0);
+    }
+
     // Redraw canvas
     gtk_widget_queue_draw(win->canvas);
-    
+
     g_free(filename);
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Screenshot saved and copied to clipboard");
 }
@@ -787,19 +804,42 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
     return FALSE;  // Event not handled
 }
 
+// Generate a sequenced save filename from the original capture filename
+// e.g. /path/LinShot_20260328_120000.png -> /path/LinShot_20260328_120000_1.png
+static char* generate_save_filename(MainWindowData* win_data, MainWindow* win) {
+    char* base = win_data->current_filename;
+    if (!base) {
+        // Fallback if no original filename tracked
+        return generate_screenshot_filename(win);
+    }
+
+    // Split at last '.' to insert _N before extension
+    char* dot = strrchr(base, '.');
+    if (!dot) {
+        return g_strdup_printf("%s_%d", base, win_data->save_sequence);
+    }
+
+    // Build: everything before dot + _N + extension
+    size_t prefix_len = (size_t)(dot - base);
+    char* prefix = g_strndup(base, prefix_len);
+    char* result = g_strdup_printf("%s_%d%s", prefix, win_data->save_sequence, dot);
+    g_free(prefix);
+    return result;
+}
+
 static void on_save_button_clicked(GtkWidget* widget, gpointer data) {
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_save_button_clicked");
-    
+
     if (!win_data->current_image) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image to save");
         return;
     }
-    
-    // Generate default filename using the dedicated function
-    char* default_filename = generate_screenshot_filename(win);
-    
+
+    // Generate sequenced filename based on original capture name
+    char* default_filename = generate_save_filename(win_data, win);
+
     GtkWidget* dialog = gtk_file_chooser_dialog_new(
         "Save Screenshot",
         GTK_WINDOW(win->window),
@@ -808,8 +848,14 @@ static void on_save_button_clicked(GtkWidget* widget, gpointer data) {
         "Save", GTK_RESPONSE_ACCEPT,
         NULL
     );
-    
-    gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(dialog), default_filename);
+
+    // Split into folder and basename for the save dialog
+    char* dir = g_path_get_dirname(default_filename);
+    char* base = g_path_get_basename(default_filename);
+    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), dir);
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), base);
+    g_free(dir);
+    g_free(base);
     g_free(default_filename);
     
     // Add file filters
@@ -900,9 +946,13 @@ static void on_save_button_clicked(GtkWidget* widget, gpointer data) {
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
         char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
         save_image_with_annotations(win, win_data->current_image, win_data->annotations, filename);
+
+        // Increment sequence for next save
+        win_data->save_sequence++;
+
         g_free(filename);
     }
-    
+
     gtk_widget_destroy(dialog);
 }
 
@@ -1168,28 +1218,38 @@ static void create_settings_page(MainWindow* win, GtkWidget* notebook) {
     GtkWidget* shortcut_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_set_border_width(GTK_CONTAINER(shortcut_box), 10);
     
+    // Labels and enum values must match 1:1
     const char* shortcut_labels[] = {
         "Print Screen",
         "Ctrl + Print Screen",
-        "Alt + Print Screen",
         "Shift + Print Screen",
-        "Ctrl + Shift + Print Screen"
+        "Ctrl + Shift + S",
+        "Ctrl + Alt + S"
     };
-    
+    // Map radio index -> ShortcutKey enum value (skip SHORTCUT_NONE=0)
+    const ShortcutKey shortcut_values[] = {
+        SHORTCUT_PRINTSCREEN,       // 1
+        SHORTCUT_CTRL_PRINTSCREEN,  // 2
+        SHORTCUT_SHIFT_PRINTSCREEN, // 3
+        SHORTCUT_CTRL_SHIFT_S,      // 4
+        SHORTCUT_CTRL_ALT_S         // 5
+    };
+
     GtkWidget* shortcut_radio = NULL;
     for (int i = 0; i < 5; i++) {
         GtkWidget* radio = gtk_radio_button_new_with_label_from_widget(
             GTK_RADIO_BUTTON(shortcut_radio), shortcut_labels[i]);
         shortcut_radio = radio;
-        
+
         safe_set_data(radio, "settings", settings, "create_settings_page");
         safe_set_data(radio, "window", win, "create_settings_page");
-        safe_set_data(radio, "shortcut", GINT_TO_POINTER(i), "create_settings_page");
-        
-        if (settings->shortcut_key == (ShortcutKey)i) {
+        // Store enum value (1-5), never 0, so GINT_TO_POINTER is always non-NULL
+        safe_set_data(radio, "shortcut", GINT_TO_POINTER(shortcut_values[i]), "create_settings_page");
+
+        if (settings->shortcut_key == shortcut_values[i]) {
             gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(radio), TRUE);
         }
-        
+
         g_signal_connect(radio, "toggled", G_CALLBACK(on_settings_changed), NULL);
         gtk_box_pack_start(GTK_BOX(shortcut_box), radio, FALSE, FALSE, 0);
     }
@@ -1299,6 +1359,34 @@ static void on_settings_changed(GtkWidget* widget, gpointer data) {
                 settings->shortcut_key = (ShortcutKey)new_shortcut;
                 register_shortcut_key(win, settings->shortcut_key);
                 grab_printscreen_key(win, settings->shortcut_key);
+
+                // Update Cinnamon/GNOME custom keybinding if set as default app
+                if (settings->default_screenshot_app) {
+                    const char* binding = NULL;
+                    switch (settings->shortcut_key) {
+                        case SHORTCUT_PRINTSCREEN:      binding = "Print"; break;
+                        case SHORTCUT_CTRL_PRINTSCREEN:  binding = "<Control>Print"; break;
+                        case SHORTCUT_SHIFT_PRINTSCREEN: binding = "<Shift>Print"; break;
+                        case SHORTCUT_CTRL_SHIFT_S:      binding = "<Control><Shift>s"; break;
+                        case SHORTCUT_CTRL_ALT_S:        binding = "<Control><Alt>s"; break;
+                        default: break;
+                    }
+                    if (binding) {
+                        char* cmd;
+                        if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
+                            cmd = g_strdup_printf(
+                                "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['%s']\"",
+                                binding);
+                        } else {
+                            cmd = g_strdup_printf(
+                                "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
+                                "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
+                                "binding '%s' 2>/dev/null", binding);
+                        }
+                        run_cmd(cmd);
+                        g_free(cmd);
+                    }
+                }
             }
         }
     }
@@ -1378,60 +1466,60 @@ static void toggle_default_screenshot_app(bool enable) {
         }
 
         char* update_cmd = g_strdup_printf("update-desktop-database %s 2>/dev/null", apps_dir);
-        (void)system(update_cmd);
+        run_cmd(update_cmd);
         g_free(update_cmd);
 
         if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
             // Cinnamon (Linux Mint): disable built-in screenshot keys
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot '[]'");
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot-clip '[]'");
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot '[]'");
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip '[]'");
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot '[]'");
-            (void)system("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot-clip '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot '[]'");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]'");
 
             // Register LinShot via Cinnamon custom keybinding
-            (void)system("gsettings set org.cinnamon.desktop.keybindings custom-list \"['linshot']\"");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list \"['linshot']\"");
 
             char* cmd;
             cmd = g_strdup_printf(
                 "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/name \"'LinShot Screenshot'\"");
-            (void)system(cmd); g_free(cmd);
+            run_cmd(cmd); g_free(cmd);
 
             cmd = g_strdup_printf(
                 "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/command \"'%s --capture'\"", binary_path);
-            (void)system(cmd); g_free(cmd);
+            run_cmd(cmd); g_free(cmd);
 
-            (void)system(
+            run_cmd(
                 "dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['Print']\"");
 
         } else {
             // GNOME / Ubuntu / other GTK-based DEs
-            (void)system("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot '[]' 2>/dev/null");
-            (void)system("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot-clip '[]' 2>/dev/null");
-            (void)system("gsettings set org.gnome.settings-daemon.plugins.media-keys window-screenshot '[]' 2>/dev/null");
-            (void)system("gsettings set org.gnome.settings-daemon.plugins.media-keys area-screenshot '[]' 2>/dev/null");
-            (void)system("gsettings set org.gnome.shell.keybindings screenshot '[]' 2>/dev/null");
-            (void)system("gsettings set org.gnome.shell.keybindings show-screenshot-ui '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys screenshot-clip '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys window-screenshot '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys area-screenshot '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.shell.keybindings screenshot '[]' 2>/dev/null");
+            run_cmd("gsettings set org.gnome.shell.keybindings show-screenshot-ui '[]' 2>/dev/null");
 
             char* binding_cmd = g_strdup_printf(
                 "gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "
                 "\"['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/']\" 2>/dev/null");
-            (void)system(binding_cmd); g_free(binding_cmd);
+            run_cmd(binding_cmd); g_free(binding_cmd);
 
             char* name_cmd = g_strdup_printf(
                 "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
                 "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
                 "name 'LinShot Screenshot' 2>/dev/null");
-            (void)system(name_cmd); g_free(name_cmd);
+            run_cmd(name_cmd); g_free(name_cmd);
 
             char* exec_cmd = g_strdup_printf(
                 "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
                 "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
                 "command '%s --capture' 2>/dev/null", binary_path);
-            (void)system(exec_cmd); g_free(exec_cmd);
+            run_cmd(exec_cmd); g_free(exec_cmd);
 
-            (void)system(
+            run_cmd(
                 "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
                 "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ "
                 "binding 'Print' 2>/dev/null");
@@ -1441,31 +1529,31 @@ static void toggle_default_screenshot_app(bool enable) {
         // Remove desktop file
         g_unlink(desktop_file);
         char* update_cmd = g_strdup_printf("update-desktop-database %s 2>/dev/null", apps_dir);
-        (void)system(update_cmd);
+        run_cmd(update_cmd);
         g_free(update_cmd);
 
         if (is_desktop_env("Cinnamon") || is_desktop_env("X-Cinnamon")) {
             // Restore Cinnamon defaults
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot-clip");
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot");
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip");
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
-            (void)system("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot-clip");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
+            run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip");
 
             // Remove custom keybinding
-            (void)system("gsettings set org.cinnamon.desktop.keybindings custom-list '[]'");
-            (void)system("dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/");
+            run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list '[]'");
+            run_cmd("dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/");
 
         } else {
             // Restore GNOME defaults
-            (void)system("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot 2>/dev/null");
-            (void)system("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot-clip 2>/dev/null");
-            (void)system("gsettings reset org.gnome.settings-daemon.plugins.media-keys window-screenshot 2>/dev/null");
-            (void)system("gsettings reset org.gnome.settings-daemon.plugins.media-keys area-screenshot 2>/dev/null");
-            (void)system("gsettings reset org.gnome.shell.keybindings screenshot 2>/dev/null");
-            (void)system("gsettings reset org.gnome.shell.keybindings show-screenshot-ui 2>/dev/null");
-            (void)system("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings '[]' 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys screenshot-clip 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys window-screenshot 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.settings-daemon.plugins.media-keys area-screenshot 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.shell.keybindings screenshot 2>/dev/null");
+            run_cmd("gsettings reset org.gnome.shell.keybindings show-screenshot-ui 2>/dev/null");
+            run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings '[]' 2>/dev/null");
         }
     }
 
@@ -1478,50 +1566,42 @@ static GdkFilterReturn key_filter_func(GdkXEvent* xevent, GdkEvent* event, gpoin
     (void)event;
     MainWindow* win = (MainWindow*)data;
     XEvent* xe = (XEvent*)xevent;
-    
+
     if (xe->type == KeyPress) {
         XKeyEvent* key_event = (XKeyEvent*)xe;
         KeySym key_sym = XLookupKeysym(key_event, 0);
-        unsigned int modifiers = key_event->state;
+        // Strip lock keys (NumLock=Mod2, CapsLock=Lock, ScrollLock=Mod5)
+        unsigned int mods = key_event->state & ~(Mod2Mask | LockMask | Mod5Mask);
         Settings* settings = safe_get_data(win->window, "settings", "key_filter_func");
-        
-        // Check if the key combination matches the configured shortcut
+        if (!settings) return GDK_FILTER_CONTINUE;
+
+        bool matched = false;
         switch (settings->shortcut_key) {
             case SHORTCUT_PRINTSCREEN:
-                if (key_sym == XK_Print && modifiers == 0) {
-                    on_capture_button_clicked(NULL, win);
-                    return GDK_FILTER_REMOVE;
-                }
+                matched = (key_sym == XK_Print && mods == 0);
                 break;
             case SHORTCUT_CTRL_PRINTSCREEN:
-                if (key_sym == XK_Print && (modifiers & ControlMask)) {
-                    on_capture_button_clicked(NULL, win);
-                    return GDK_FILTER_REMOVE;
-                }
+                matched = (key_sym == XK_Print && mods == ControlMask);
                 break;
             case SHORTCUT_SHIFT_PRINTSCREEN:
-                if (key_sym == XK_Print && (modifiers & ShiftMask)) {
-                    on_capture_button_clicked(NULL, win);
-                    return GDK_FILTER_REMOVE;
-                }
+                matched = (key_sym == XK_Print && mods == ShiftMask);
                 break;
             case SHORTCUT_CTRL_SHIFT_S:
-                if (key_sym == XK_s && (modifiers & (ControlMask | ShiftMask))) {
-                    on_capture_button_clicked(NULL, win);
-                    return GDK_FILTER_REMOVE;
-                }
+                matched = (key_sym == XK_s && mods == (ControlMask | ShiftMask));
                 break;
             case SHORTCUT_CTRL_ALT_S:
-                if (key_sym == XK_s && (modifiers & (ControlMask | Mod1Mask))) {
-                    on_capture_button_clicked(NULL, win);
-                    return GDK_FILTER_REMOVE;
-                }
+                matched = (key_sym == XK_s && mods == (ControlMask | Mod1Mask));
                 break;
             default:
                 break;
         }
+
+        if (matched) {
+            on_capture_button_clicked(NULL, win);
+            return GDK_FILTER_REMOVE;
+        }
     }
-    
+
     return GDK_FILTER_CONTINUE;
 }
 
@@ -1587,8 +1667,50 @@ static void on_tray_popup(GtkStatusIcon* icon, guint button, guint activate_time
     (void)activate_time;
 }
 
+// Create the app icon (circle with dot) as a pixbuf at given size via Cairo
+static GdkPixbuf* create_app_icon_pixbuf(int size, bool for_tray) {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t* cr = cairo_create(surface);
+
+    double cx = size / 2.0;
+    double cy = size / 2.0;
+    double outer_r = size * 0.35;
+    double inner_r = size * 0.10;
+    double lw = size * 0.10;
+
+    if (for_tray) {
+        // Tray icon: dark circle background for visibility
+        cairo_set_source_rgb(cr, 0.18, 0.18, 0.18);
+        cairo_arc(cr, cx, cy, size * 0.46, 0, 2 * G_PI);
+        cairo_fill(cr);
+    }
+
+    // Outer circle
+    cairo_set_line_width(cr, lw);
+    cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+    cairo_arc(cr, cx, cy, outer_r, 0, 2 * G_PI);
+    cairo_stroke(cr);
+
+    // Inner dot
+    cairo_arc(cr, cx, cy, inner_r, 0, 2 * G_PI);
+    cairo_fill(cr);
+
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+
+    GdkPixbuf* pb = gdk_pixbuf_get_from_surface(surface, 0, 0, size, size);
+    cairo_surface_destroy(surface);
+    return pb;
+}
+
 static void setup_tray_icon(MainWindow* win) {
-    win->tray_icon = gtk_status_icon_new_from_icon_name("camera-photo");
+    GdkPixbuf* tray_pb = create_app_icon_pixbuf(24, true);
+    if (tray_pb) {
+        win->tray_icon = gtk_status_icon_new_from_pixbuf(tray_pb);
+        g_object_unref(tray_pb);
+    } else {
+        win->tray_icon = gtk_status_icon_new_from_icon_name("camera-photo");
+    }
     gtk_status_icon_set_tooltip_text(win->tray_icon, "LinShot Screenshot Tool");
     gtk_status_icon_set_visible(win->tray_icon, TRUE);
 
@@ -1661,11 +1783,13 @@ static void grab_printscreen_key(MainWindow* win, ShortcutKey key) {
             return;
     }
 
-    // Grab with and without NumLock/CapsLock/ScrollLock
-    XGrabKey(dpy, kc, mod, root, True, GrabModeAsync, GrabModeAsync);
-    XGrabKey(dpy, kc, mod | Mod2Mask, root, True, GrabModeAsync, GrabModeAsync);  // NumLock
-    XGrabKey(dpy, kc, mod | LockMask, root, True, GrabModeAsync, GrabModeAsync);  // CapsLock
-    XGrabKey(dpy, kc, mod | Mod2Mask | LockMask, root, True, GrabModeAsync, GrabModeAsync);
+    // Grab with all combinations of NumLock/CapsLock/ScrollLock
+    unsigned int lock_masks[] = {0, Mod2Mask, LockMask, Mod5Mask,
+                                  Mod2Mask | LockMask, Mod2Mask | Mod5Mask,
+                                  LockMask | Mod5Mask, Mod2Mask | LockMask | Mod5Mask};
+    for (int i = 0; i < 8; i++) {
+        XGrabKey(dpy, kc, mod | lock_masks[i], root, True, GrabModeAsync, GrabModeAsync);
+    }
 
     XFlush(dpy);
 }
@@ -1695,6 +1819,18 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_window_set_title(GTK_WINDOW(win->window), "LinShot");
     gtk_window_set_default_size(GTK_WINDOW(win->window), 800, 600);
 
+    // Set application icon (generated via Cairo, no file dependency)
+    GList* icon_list = NULL;
+    int icon_sizes[] = {16, 24, 32, 48, 64, 128};
+    for (int i = 0; i < 6; i++) {
+        GdkPixbuf* pb = create_app_icon_pixbuf(icon_sizes[i], false);
+        if (pb) icon_list = g_list_append(icon_list, pb);
+    }
+    if (icon_list) {
+        gtk_window_set_icon_list(GTK_WINDOW(win->window), icon_list);
+        g_list_free_full(icon_list, g_object_unref);
+    }
+
     // Connect destroy signal (only fires if delete-event allows it)
     g_signal_connect(win->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     // Intercept close to minimize to tray
@@ -1717,7 +1853,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     data->selected_text = NULL;
     data->drag_start_x = 0;
     data->drag_start_y = 0;
-    
+    data->current_filename = NULL;
+    data->save_sequence = 1;
+
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");
     
@@ -1963,6 +2101,10 @@ void main_window_cleanup(MainWindow* win) {
                 data->current_image = NULL;
             }
             
+            // Free filename tracking
+            g_free(data->current_filename);
+            data->current_filename = NULL;
+
             // Free both annotations list and undo stack
             g_list_free_full(data->annotations, (GDestroyNotify)annotation_free);
             g_list_free_full(data->undo_stack, (GDestroyNotify)annotation_free);

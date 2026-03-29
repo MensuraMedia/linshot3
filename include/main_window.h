@@ -29,6 +29,8 @@ typedef struct {
     double drag_start_x;       // Starting point for text dragging
     double drag_start_y;
     bool capture_on_ready;     // Auto-capture after window is ready
+    char* current_filename;    // Original capture filename (for save-as sequencing)
+    int save_sequence;         // Next _N suffix for save
 } MainWindowData;
 
 // Initialize and show the main window

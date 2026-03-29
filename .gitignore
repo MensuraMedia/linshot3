@@ -35,6 +35,16 @@ venv/
 # Logs
 *.log
 
+# Generated binaries and dev artifacts
+icon_preview
+icon_preview.c
+icon_preview.png
+generate_icon
+generate_icon.c
+
+# Debian packages
+*.deb
+
 # Other
 linshot
-screenshot_app 
+screenshot_app

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LinShot
+GenericName=Screenshot Tool
+Comment=Capture, annotate, and share screenshots
+Exec=linshot
+Icon=linshot
+Terminal=false
+Categories=Utility;Graphics;GTK;
+Keywords=screenshot;capture;screen;snip;annotation;
+MimeType=image/png;image/jpeg;
+StartupNotify=true
+Actions=capture;
+
+[Desktop Action capture]
+Name=Capture Screenshot
+Exec=linshot --capture
