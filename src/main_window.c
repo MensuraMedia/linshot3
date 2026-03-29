@@ -2652,7 +2652,7 @@ static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider)
     // Version
     GtkWidget* version = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(version),
-        "<span size='large' foreground='#aaaaaa'>Version 1.2.0 Beta</span>");
+        "<span size='large' foreground='#aaaaaa'>Version 1.4.0 Beta</span>");
     gtk_widget_set_halign(version, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(vbox), version, FALSE, FALSE, 0);
 
