@@ -20,6 +20,8 @@ typedef enum {
     ICON_SELECT,
     ICON_FLATTEN,
     ICON_COPY,
+    ICON_BORDER,
+    ICON_BLUR,
     ICON_SAVE,
     ICON_COUNT
 } SidebarIconType;

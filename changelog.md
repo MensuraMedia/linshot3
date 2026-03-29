@@ -22,3 +22,10 @@
 | 2026-03-29T16:30:00-04:00 | chore: apply full universal standards — add rules (memory-rules, token-hygiene, security), create decisions.md, pending.md, and project-local MEMORY.md index |
 | 2026-03-29T16:35:00-04:00 | chore: update settings.local.json to match universal-permissions (added 15 missing tool permissions) |
 | 2026-03-29T21:00:00-04:00 | chore: apply full v2026.04 universal standards — hooks (6), skills (5), commands (5), agent-teams (3), routing-rules, settings.json, c-gtk sector rule, CLAUDE.md v2026.04 |
+| 2026-03-29T22:00:00-04:00 | feat: multi-paste overlays — Ctrl+V creates independent moveable overlays, all flattened together |
+| 2026-03-29T22:30:00-04:00 | feat: Tools tab redesign — circular color swatches with glow, bold titles, shadow with diffused multi-pass rendering, universal settings, 3x3 grid layout |
+| 2026-03-29T23:00:00-04:00 | feat: Border tool — decorative double-border frames with color, width, and shadow settings |
+| 2026-03-29T23:15:00-04:00 | feat: Blur tool — pixelate/mosaic effect for redacting regions with adjustable block size |
+| 2026-03-29T23:30:00-04:00 | feat: Text section layout — vertical flow with font preview (Sample Text + 0123456789), dynamic font/style updates |
+| 2026-03-29T23:45:00-04:00 | fix: Universal Setting checkbox — enables/disables controls, color changes now refresh all tool palettes |
+| 2026-03-29T23:50:00-04:00 | style: minimal spinbuttons (#ccc +/- chars), restored slider coloring, smaller color circles (18px) |

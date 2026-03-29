@@ -13,7 +13,9 @@ typedef enum {
     TOOL_TEXT,
     TOOL_FREEHAND,
     TOOL_MARQUEE,
-    TOOL_LINE
+    TOOL_LINE,
+    TOOL_BORDER,
+    TOOL_BLUR
 } ToolType;
 
 // Font settings for text tool
@@ -30,6 +32,9 @@ typedef struct {
     double line_width;
     bool fill;
     FontSettings font;   // Font settings for text tool
+    bool shadow;         // Draw shadow behind annotation
+    double shadow_intensity; // Shadow opacity 0.0-1.0
+    int blur_block_size; // Pixelate block size (4-32)
 } ToolSettings;
 
 typedef struct {

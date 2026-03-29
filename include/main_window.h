@@ -17,6 +17,12 @@ typedef struct {
     bool minimize_to_tray;        // Whether to minimize to tray on close
 } MainWindow;
 
+// Individual paste overlay (supports multiple simultaneous pastes)
+typedef struct {
+    cairo_surface_t* surface;  // The pasted image
+    double x, y;               // Position on canvas
+} PasteOverlay;
+
 typedef struct {
     MainWindow win;
     cairo_surface_t* current_image;
@@ -34,13 +40,15 @@ typedef struct {
     // Marquee selection state
     bool has_marquee;          // Whether a marquee selection is active
     PointPair marquee_bounds;  // Marquee selection rectangle
-    // Paste overlay state
-    cairo_surface_t* paste_overlay;  // Pasted image floating on canvas
-    double paste_x;            // Overlay position
+    // Paste overlay state (multi-paste support)
+    cairo_surface_t* paste_overlay;  // Legacy single overlay (kept for compat)
+    double paste_x;            // Legacy overlay position
     double paste_y;
-    bool dragging_paste;       // Currently dragging the paste overlay
+    bool dragging_paste;       // Currently dragging a paste overlay
     double paste_drag_ox;      // Drag offset from overlay origin
     double paste_drag_oy;
+    GList* paste_overlays;     // List of PasteOverlay* for multi-paste
+    PasteOverlay* dragging_overlay; // Which overlay is being dragged
 } MainWindowData;
 
 // Initialize and show the main window

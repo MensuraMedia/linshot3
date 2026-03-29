@@ -44,12 +44,15 @@ typedef struct {
     bool start_with_os;  // New: Start with OS option
     ShortcutKey shortcut_key;  // New: Shortcut key option
     bool default_screenshot_app;  // Register as default screenshot tool
-    GdkRGBA tool_colors[5];      // Per-tool colors: [0]=arrow, [1]=box, [2]=circle, [3]=text, [4]=line
-    double tool_widths[4];       // Per-tool line widths: [0]=arrow, [1]=box, [2]=circle, [3]=line
+    GdkRGBA tool_colors[6];      // Per-tool colors: [0]=arrow, [1]=box, [2]=circle, [3]=text, [4]=line, [5]=border
+    double tool_widths[5];       // Per-tool line widths: [0]=arrow, [1]=box, [2]=circle, [3]=line, [4]=border
     char* text_font_family;      // Text tool font family
     double text_font_size;       // Text tool font size
     bool text_font_bold;         // Text tool bold
     bool text_font_italic;       // Text tool italic
+    bool tool_shadow[6];         // Shadow enabled: [0]=arrow, [1]=box, [2]=circle, [3]=text, [4]=line, [5]=border
+    double tool_shadow_intensity[6]; // Shadow intensity 0.0-1.0
+    int blur_block_size;         // Pixelate block size (4-32)
 } Settings;
 
 // Forward declarations
@@ -67,6 +70,7 @@ static GdkFilterReturn key_filter_func(GdkXEvent* xevent, GdkEvent* event, gpoin
 static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surface, GList* annotations, const char* filename);
 static void on_capture_button_clicked(GtkWidget* widget, gpointer data);
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
+static void paste_overlay_free(PasteOverlay* overlay);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
 static void on_copy_button_clicked(GtkWidget* widget, gpointer data);
 static void grab_printscreen_key(MainWindow* win, ShortcutKey key);
@@ -147,13 +151,18 @@ static void load_settings(Settings* settings) {
     settings->tool_widths[1] = 2.5;  // box
     settings->tool_widths[2] = 2.5;  // circle
     settings->tool_widths[3] = 3.0;  // line
+    settings->tool_widths[4] = 2.5;  // border
+
+    settings->blur_block_size = 10;
 
     // Default tool colors (all red)
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         settings->tool_colors[i].red = 1.0;
         settings->tool_colors[i].green = 0.0;
         settings->tool_colors[i].blue = 0.0;
         settings->tool_colors[i].alpha = 1.0;
+        settings->tool_shadow[i] = false;
+        settings->tool_shadow_intensity[i] = 0.4;
     }
 
     // Try to load from config file
@@ -189,8 +198,8 @@ static void load_settings(Settings* settings) {
         }
 
         // Load per-tool colors
-        const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line"};
-        for (int i = 0; i < 5; i++) {
+        const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line", "color_border"};
+        for (int i = 0; i < 6; i++) {
             char* color_str = g_key_file_get_string(key_file, "Settings", color_keys[i], NULL);
             if (color_str) {
                 gdk_rgba_parse(&settings->tool_colors[i], color_str);
@@ -199,13 +208,30 @@ static void load_settings(Settings* settings) {
         }
 
         // Load per-tool line widths
-        const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line"};
-        for (int i = 0; i < 4; i++) {
+        const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line", "width_border"};
+        for (int i = 0; i < 5; i++) {
             GError* werr = NULL;
             double w = g_key_file_get_double(key_file, "Settings", width_keys[i], &werr);
             if (!werr && w > 0) settings->tool_widths[i] = w;
             if (werr) g_error_free(werr);
         }
+
+        // Load shadow settings
+        const char* shadow_keys[] = {"shadow_arrow", "shadow_box", "shadow_circle", "shadow_text", "shadow_line", "shadow_border"};
+        const char* shadow_int_keys[] = {"shadow_int_arrow", "shadow_int_box", "shadow_int_circle", "shadow_int_text", "shadow_int_line", "shadow_int_border"};
+        for (int i = 0; i < 6; i++) {
+            GError* sherr = NULL;
+            settings->tool_shadow[i] = g_key_file_get_boolean(key_file, "Settings", shadow_keys[i], &sherr);
+            if (sherr) { settings->tool_shadow[i] = false; g_error_free(sherr); }
+            sherr = NULL;
+            double si = g_key_file_get_double(key_file, "Settings", shadow_int_keys[i], &sherr);
+            if (!sherr && si >= 0) settings->tool_shadow_intensity[i] = si; else if (sherr) g_error_free(sherr);
+        }
+
+        // Load blur settings
+        GError* berr = NULL;
+        int bsize = g_key_file_get_integer(key_file, "Settings", "blur_block_size", &berr);
+        if (!berr && bsize >= 4) settings->blur_block_size = bsize; else if (berr) g_error_free(berr);
 
         // Load text font settings
         char* font = g_key_file_get_string(key_file, "Settings", "text_font_family", NULL);
@@ -238,16 +264,16 @@ static void save_settings(Settings* settings) {
     g_key_file_set_boolean(key_file, "Settings", "default_screenshot_app", settings->default_screenshot_app);
 
     // Save per-tool colors
-    const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line"};
-    for (int i = 0; i < 5; i++) {
+    const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line", "color_border"};
+    for (int i = 0; i < 6; i++) {
         char* color_str = gdk_rgba_to_string(&settings->tool_colors[i]);
         g_key_file_set_string(key_file, "Settings", color_keys[i], color_str);
         g_free(color_str);
     }
 
     // Save per-tool line widths
-    const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line"};
-    for (int i = 0; i < 4; i++) {
+    const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line", "width_border"};
+    for (int i = 0; i < 5; i++) {
         g_key_file_set_double(key_file, "Settings", width_keys[i], settings->tool_widths[i]);
     }
 
@@ -256,6 +282,17 @@ static void save_settings(Settings* settings) {
     g_key_file_set_double(key_file, "Settings", "text_font_size", settings->text_font_size);
     g_key_file_set_boolean(key_file, "Settings", "text_font_bold", settings->text_font_bold);
     g_key_file_set_boolean(key_file, "Settings", "text_font_italic", settings->text_font_italic);
+
+    // Save blur settings
+    g_key_file_set_integer(key_file, "Settings", "blur_block_size", settings->blur_block_size);
+
+    // Save shadow settings
+    const char* shadow_keys[] = {"shadow_arrow", "shadow_box", "shadow_circle", "shadow_text", "shadow_line", "shadow_border"};
+    const char* shadow_int_keys[] = {"shadow_int_arrow", "shadow_int_box", "shadow_int_circle", "shadow_int_text", "shadow_int_line", "shadow_int_border"};
+    for (int i = 0; i < 6; i++) {
+        g_key_file_set_boolean(key_file, "Settings", shadow_keys[i], settings->tool_shadow[i]);
+        g_key_file_set_double(key_file, "Settings", shadow_int_keys[i], settings->tool_shadow_intensity[i]);
+    }
 
     // Save to file
     GError* error = NULL;
@@ -677,8 +714,16 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
             else if (tool_id == TOOL_ELLIPSE)   { color_map = 2; width_map = 2; }
             else if (tool_id == TOOL_TEXT)       { color_map = 3; }
             else if (tool_id == TOOL_LINE)       { color_map = 4; width_map = 3; }
+            else if (tool_id == TOOL_BORDER)     { color_map = 5; width_map = 4; }
+            else if (tool_id == TOOL_BLUR) {
+                win_data->current_tool.blur_block_size = settings->blur_block_size;
+            }
             if (color_map >= 0) {
                 win_data->current_tool.color = settings->tool_colors[color_map];
+                // Apply shadow settings (shadow indices match color indices for 0-4)
+                int shadow_map = color_map;
+                win_data->current_tool.shadow = settings->tool_shadow[shadow_map];
+                win_data->current_tool.shadow_intensity = settings->tool_shadow_intensity[shadow_map];
             }
             if (width_map >= 0) {
                 win_data->current_tool.line_width = settings->tool_widths[width_map];
@@ -693,7 +738,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         }
 
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -766,23 +811,28 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
             }
         }
 
-        // Draw paste overlay if present
-        if (win_data->paste_overlay) {
-            cairo_set_source_surface(image_cr, win_data->paste_overlay,
-                                     win_data->paste_x, win_data->paste_y);
+        // Draw all paste overlays
+        for (GList* piter = win_data->paste_overlays; piter; piter = piter->next) {
+            PasteOverlay* overlay = (PasteOverlay*)piter->data;
+            cairo_set_source_surface(image_cr, overlay->surface, overlay->x, overlay->y);
             cairo_paint(image_cr);
 
-            // Draw border around paste overlay so user can see it
-            int pw = cairo_image_surface_get_width(win_data->paste_overlay);
-            int ph = cairo_image_surface_get_height(win_data->paste_overlay);
+            // Draw dashed border around each overlay
+            int pw = cairo_image_surface_get_width(overlay->surface);
+            int ph = cairo_image_surface_get_height(overlay->surface);
             cairo_save(image_cr);
             cairo_set_line_join(image_cr, CAIRO_LINE_JOIN_MITER);
             cairo_set_line_cap(image_cr, CAIRO_LINE_CAP_BUTT);
             double dashes[] = {4.0, 3.0};
             cairo_set_dash(image_cr, dashes, 2, 0);
             cairo_set_line_width(image_cr, 1.5);
-            cairo_set_source_rgba(image_cr, 0.2, 0.6, 1.0, 0.9);
-            cairo_rectangle(image_cr, win_data->paste_x + 0.5, win_data->paste_y + 0.5, pw, ph);
+            // Highlight the actively dragged overlay in a different color
+            if (overlay == win_data->dragging_overlay) {
+                cairo_set_source_rgba(image_cr, 1.0, 0.6, 0.2, 0.9);
+            } else {
+                cairo_set_source_rgba(image_cr, 0.2, 0.6, 1.0, 0.9);
+            }
+            cairo_rectangle(image_cr, overlay->x + 0.5, overlay->y + 0.5, pw, ph);
             cairo_stroke(image_cr);
             cairo_restore(image_cr);
         }
@@ -873,15 +923,17 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_button_press");
     
     if (event->button == 1) {  // Left mouse button
-        // Check if clicking on the paste overlay
-        if (win_data->paste_overlay) {
-            int pw = cairo_image_surface_get_width(win_data->paste_overlay);
-            int ph = cairo_image_surface_get_height(win_data->paste_overlay);
-            if (event->x >= win_data->paste_x && event->x <= win_data->paste_x + pw &&
-                event->y >= win_data->paste_y && event->y <= win_data->paste_y + ph) {
+        // Check if clicking on any paste overlay (check topmost/last first)
+        for (GList* piter = g_list_last(win_data->paste_overlays); piter; piter = piter->prev) {
+            PasteOverlay* overlay = (PasteOverlay*)piter->data;
+            int pw = cairo_image_surface_get_width(overlay->surface);
+            int ph = cairo_image_surface_get_height(overlay->surface);
+            if (event->x >= overlay->x && event->x <= overlay->x + pw &&
+                event->y >= overlay->y && event->y <= overlay->y + ph) {
                 win_data->dragging_paste = true;
-                win_data->paste_drag_ox = event->x - win_data->paste_x;
-                win_data->paste_drag_oy = event->y - win_data->paste_y;
+                win_data->dragging_overlay = overlay;
+                win_data->paste_drag_ox = event->x - overlay->x;
+                win_data->paste_drag_oy = event->y - overlay->y;
                 gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Dragging pasted image - click Flatten when positioned");
                 return TRUE;
             }
@@ -925,9 +977,9 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_motion_notify");
     
-    if (win_data->dragging_paste && win_data->paste_overlay) {
-        win_data->paste_x = event->x - win_data->paste_drag_ox;
-        win_data->paste_y = event->y - win_data->paste_drag_oy;
+    if (win_data->dragging_paste && win_data->dragging_overlay) {
+        win_data->dragging_overlay->x = event->x - win_data->paste_drag_ox;
+        win_data->dragging_overlay->y = event->y - win_data->paste_drag_oy;
         gtk_widget_queue_draw(win->canvas);
     } else if (win_data->selected_text) {
         // Update text position while dragging
@@ -989,6 +1041,7 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpoi
     if (event->button == 1) {
         if (win_data->dragging_paste) {
             win_data->dragging_paste = false;
+            win_data->dragging_overlay = NULL;
             gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste positioned - click Flatten to commit");
         } else if (win_data->selected_text) {
             // Finish moving text
@@ -1090,7 +1143,11 @@ static void undo_last_annotation(MainWindowData* win_data) {
 }
 
 static void flatten_paste_overlay(MainWindow* win, MainWindowData* win_data) {
-    if (!win_data->paste_overlay || !win_data->current_image) return;
+    if (!win_data->paste_overlays && !win_data->paste_overlay) {
+        // Nothing to flatten — just bake annotations if any
+        if (!win_data->annotations && !win_data->current_image) return;
+    }
+    if (!win_data->current_image) return;
 
     int img_w = cairo_image_surface_get_width(win_data->current_image);
     int img_h = cairo_image_surface_get_height(win_data->current_image);
@@ -1107,9 +1164,12 @@ static void flatten_paste_overlay(MainWindow* win, MainWindowData* win_data) {
         annotation_draw((Annotation*)iter->data, cr);
     }
 
-    // Draw paste overlay at its current position
-    cairo_set_source_surface(cr, win_data->paste_overlay, win_data->paste_x, win_data->paste_y);
-    cairo_paint(cr);
+    // Draw all paste overlays at their positions
+    for (GList* iter = win_data->paste_overlays; iter; iter = iter->next) {
+        PasteOverlay* overlay = (PasteOverlay*)iter->data;
+        cairo_set_source_surface(cr, overlay->surface, overlay->x, overlay->y);
+        cairo_paint(cr);
+    }
 
     cairo_destroy(cr);
 
@@ -1117,18 +1177,25 @@ static void flatten_paste_overlay(MainWindow* win, MainWindowData* win_data) {
     cairo_surface_destroy(win_data->current_image);
     win_data->current_image = combined;
 
-    // Clear annotations and overlay (annotations are baked in)
+    // Clear annotations (baked in)
     g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
     win_data->annotations = NULL;
     g_list_free_full(win_data->undo_stack, (GDestroyNotify)annotation_free);
     win_data->undo_stack = NULL;
 
-    cairo_surface_destroy(win_data->paste_overlay);
+    // Clear all paste overlays
+    g_list_free_full(win_data->paste_overlays, (GDestroyNotify)paste_overlay_free);
+    win_data->paste_overlays = NULL;
     win_data->paste_overlay = NULL;
+    win_data->dragging_overlay = NULL;
     win_data->has_marquee = false;
 
+    int count = 0;
+    char msg[128];
+    snprintf(msg, sizeof(msg), "All overlays and annotations flattened into image");
     gtk_widget_queue_draw(win->canvas);
-    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste flattened into image");
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+    (void)count;
 }
 
 static void on_flatten_button_clicked(GtkWidget* widget, gpointer data) {
@@ -1138,6 +1205,12 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data) {
     if (win_data) {
         flatten_paste_overlay(win, win_data);
     }
+}
+
+static void paste_overlay_free(PasteOverlay* overlay) {
+    if (!overlay) return;
+    if (overlay->surface) cairo_surface_destroy(overlay->surface);
+    free(overlay);
 }
 
 static void paste_from_clipboard(MainWindow* win, MainWindowData* win_data) {
@@ -1151,38 +1224,46 @@ static void paste_from_clipboard(MainWindow* win, MainWindowData* win_data) {
     int paste_w = gdk_pixbuf_get_width(pb);
     int paste_h = gdk_pixbuf_get_height(pb);
 
-    // Free any existing paste overlay
-    if (win_data->paste_overlay) {
-        cairo_surface_destroy(win_data->paste_overlay);
-    }
-
-    // Create a cairo surface from the pixbuf
-    win_data->paste_overlay = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, paste_w, paste_h);
-    cairo_t* cr = cairo_create(win_data->paste_overlay);
+    // Create a new paste overlay
+    PasteOverlay* overlay = (PasteOverlay*)malloc(sizeof(PasteOverlay));
+    overlay->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, paste_w, paste_h);
+    cairo_t* cr = cairo_create(overlay->surface);
     gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
     cairo_paint(cr);
     cairo_destroy(cr);
 
-    // Position at center of current image (or at origin if no image)
+    // Position: offset each successive paste so they don't stack exactly
+    int count = g_list_length(win_data->paste_overlays);
+    double offset = count * 20.0;
+
     if (win_data->current_image) {
         int img_w = cairo_image_surface_get_width(win_data->current_image);
         int img_h = cairo_image_surface_get_height(win_data->current_image);
-        win_data->paste_x = (img_w - paste_w) / 2.0;
-        win_data->paste_y = (img_h - paste_h) / 2.0;
-        if (win_data->paste_x < 0) win_data->paste_x = 0;
-        if (win_data->paste_y < 0) win_data->paste_y = 0;
+        overlay->x = (img_w - paste_w) / 2.0 + offset;
+        overlay->y = (img_h - paste_h) / 2.0 + offset;
+        if (overlay->x < 0) overlay->x = 0;
+        if (overlay->y < 0) overlay->y = 0;
     } else {
-        // No image - create a canvas from the paste
+        // No image — create a canvas from the paste
         win_data->current_image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, paste_w, paste_h);
         cairo_t* bgcr = cairo_create(win_data->current_image);
         cairo_set_source_rgb(bgcr, 1.0, 1.0, 1.0);
         cairo_paint(bgcr);
         cairo_destroy(bgcr);
-        win_data->paste_x = 0;
-        win_data->paste_y = 0;
+        overlay->x = 0;
+        overlay->y = 0;
     }
 
+    // Add to multi-paste list
+    win_data->paste_overlays = g_list_append(win_data->paste_overlays, overlay);
+
+    // Also set legacy single pointer to the newest overlay for backward compat
+    win_data->paste_overlay = overlay->surface;
+    win_data->paste_x = overlay->x;
+    win_data->paste_y = overlay->y;
+
     win_data->dragging_paste = false;
+    win_data->dragging_overlay = NULL;
     win_data->has_marquee = false;
 
     g_object_unref(pb);
@@ -1193,8 +1274,11 @@ static void paste_from_clipboard(MainWindow* win, MainWindowData* win_data) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 0);
     }
 
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Pasted (%d overlay%s) - drag to position, Flatten to commit",
+             count + 1, count > 0 ? "s" : "");
     gtk_widget_queue_draw(win->canvas);
-    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Pasted - drag to position, then click Flatten");
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
 }
 
 static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer data) {
@@ -1245,13 +1329,15 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer dat
         }
     }
 
-    // Escape: clear marquee selection or deselect paste overlay
+    // Escape: clear paste overlays or marquee selection
     if (event->keyval == GDK_KEY_Escape) {
-        if (win_data->paste_overlay) {
-            cairo_surface_destroy(win_data->paste_overlay);
+        if (win_data->paste_overlays) {
+            g_list_free_full(win_data->paste_overlays, (GDestroyNotify)paste_overlay_free);
+            win_data->paste_overlays = NULL;
             win_data->paste_overlay = NULL;
+            win_data->dragging_overlay = NULL;
             gtk_widget_queue_draw(win->canvas);
-            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Paste discarded");
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "All pastes discarded");
             return TRUE;
         }
         if (win_data->has_marquee) {
@@ -1455,10 +1541,20 @@ static void save_image_with_annotations(MainWindow* win, cairo_surface_t* surfac
         Annotation* annotation = (Annotation*)iter->data;
         annotation_draw(annotation, cr);
     }
-    
+
+    // Draw all paste overlays (if any are still floating)
+    MainWindowData* save_win_data = safe_get_data(win->window, "window-data", "save_image_with_annotations");
+    if (save_win_data) {
+        for (GList* piter = save_win_data->paste_overlays; piter; piter = piter->next) {
+            PasteOverlay* overlay = (PasteOverlay*)piter->data;
+            cairo_set_source_surface(cr, overlay->surface, overlay->x, overlay->y);
+            cairo_paint(cr);
+        }
+    }
+
     // Ensure all drawing operations are complete
     cairo_surface_flush(combined_surface);
-    
+
     // Get the file extension
     const char* ext = strrchr(filename, '.');
     if (!ext) {
@@ -1836,23 +1932,34 @@ static gboolean on_palette_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
     (void)data;
     int ci = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "palette-idx"));
     const GdkRGBA* c = &palette_colors[ci];
+
+    double cx = 9.0, cy = 9.0, radius = 7.5;
+
+    // Filled circle
+    cairo_arc(cr, cx, cy, radius, 0, 2 * M_PI);
     cairo_set_source_rgba(cr, c->red, c->green, c->blue, c->alpha);
-    cairo_rectangle(cr, 0, 0, 28, 28);
     cairo_fill(cr);
-    // Border
-    cairo_set_source_rgba(cr, 0.4, 0.4, 0.4, 1.0);
-    cairo_set_line_width(cr, 1.0);
-    cairo_rectangle(cr, 0.5, 0.5, 27, 27);
-    cairo_stroke(cr);
-    // Check mark if this color is selected
+
+    // Selection indicator: soft glow instead of hard outline
     gboolean selected = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "is-selected"));
     if (selected) {
-        // Draw a white/black check
-        double luma = c->red * 0.299 + c->green * 0.587 + c->blue * 0.114;
-        if (luma > 0.5) cairo_set_source_rgb(cr, 0, 0, 0);
-        else cairo_set_source_rgb(cr, 1, 1, 1);
-        cairo_set_line_width(cr, 2.0);
-        cairo_move_to(cr, 7, 14); cairo_line_to(cr, 12, 20); cairo_line_to(cr, 22, 8);
+        // Multi-layer glow rings (outer to inner, fading)
+        for (int g = 4; g >= 1; g--) {
+            cairo_arc(cr, cx, cy, radius + g * 1.2, 0, 2 * M_PI);
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15 / g);
+            cairo_set_line_width(cr, 1.5);
+            cairo_stroke(cr);
+        }
+        // Inner bright ring
+        cairo_arc(cr, cx, cy, radius + 0.5, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.7);
+        cairo_set_line_width(cr, 1.5);
+        cairo_stroke(cr);
+    } else {
+        // Subtle border
+        cairo_arc(cr, cx, cy, radius, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, 0.35, 0.35, 0.35, 0.5);
+        cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
     }
     return FALSE;
@@ -1914,7 +2021,7 @@ static GtkWidget* create_tool_color_section(const char* tool_name, int tool_colo
 
     for (int i = 0; i < 12; i++) {
         GtkWidget* swatch = gtk_drawing_area_new();
-        gtk_widget_set_size_request(swatch, 28, 28);
+        gtk_widget_set_size_request(swatch, 18, 18);
         gtk_widget_add_events(swatch, GDK_BUTTON_PRESS_MASK);
         g_object_set_data(G_OBJECT(swatch), "palette-idx", GINT_TO_POINTER(i));
         g_object_set_data(G_OBJECT(swatch), "is-selected", GINT_TO_POINTER(0));
@@ -1934,7 +2041,65 @@ static GtkWidget* create_tool_color_section(const char* tool_name, int tool_colo
     // Set initial check marks
     update_palette_checks(grid, tool_color_idx, win);
 
+    // Store grid reference on the window so universal callback can refresh it
+    char grid_key[32];
+    snprintf(grid_key, sizeof(grid_key), "palette-grid-%d", tool_color_idx);
+    safe_set_data(win->window, grid_key, grid, "create_tool_color_section");
+
     return frame;
+}
+
+static void on_shadow_toggled(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_shadow_toggled");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_shadow_toggled");
+    if (!settings) return;
+    int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "shadow-idx"));
+    settings->tool_shadow[idx] = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+    save_settings(settings);
+    if (win_data) {
+        ToolType types[] = {TOOL_ARROW, TOOL_RECTANGLE, TOOL_ELLIPSE, TOOL_TEXT, TOOL_LINE, TOOL_BORDER};
+        if (win_data->current_tool.type == types[idx]) {
+            win_data->current_tool.shadow = settings->tool_shadow[idx];
+        }
+    }
+}
+
+static void on_shadow_intensity_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_shadow_intensity_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_shadow_intensity_changed");
+    if (!settings) return;
+    int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "shadow-idx"));
+    settings->tool_shadow_intensity[idx] = gtk_range_get_value(GTK_RANGE(widget));
+    save_settings(settings);
+    if (win_data) {
+        ToolType types[] = {TOOL_ARROW, TOOL_RECTANGLE, TOOL_ELLIPSE, TOOL_TEXT, TOOL_LINE, TOOL_BORDER};
+        if (win_data->current_tool.type == types[idx]) {
+            win_data->current_tool.shadow_intensity = settings->tool_shadow_intensity[idx];
+        }
+    }
+}
+
+static void on_universal_check_toggled(GtkWidget* widget, gpointer data) {
+    (void)data;
+    GtkWidget* controls = g_object_get_data(G_OBJECT(widget), "uni-controls");
+    if (controls) {
+        gtk_widget_set_sensitive(controls,
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));
+    }
+}
+
+static void on_blur_size_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_blur_size_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_blur_size_changed");
+    if (!settings) return;
+    settings->blur_block_size = (int)gtk_range_get_value(GTK_RANGE(widget));
+    save_settings(settings);
+    if (win_data && win_data->current_tool.type == TOOL_BLUR) {
+        win_data->current_tool.blur_block_size = settings->blur_block_size;
+    }
 }
 
 static void on_tool_width_changed(GtkWidget* widget, gpointer data) {
@@ -1986,6 +2151,159 @@ static void on_text_font_changed(GtkWidget* widget, gpointer data) {
     }
 
     save_settings(settings);
+
+    // Update sample text label if it exists
+    GtkWidget* sample = safe_get_data(win->window, "sample-text-label", "on_text_font_changed");
+    if (sample && GTK_IS_LABEL(sample)) {
+        const char* fam = settings->text_font_family ? settings->text_font_family : "Arial";
+        int sz = (int)settings->text_font_size;
+        if (sz > 18) sz = 18;
+        const char* weight = settings->text_font_bold ? "bold" : "normal";
+        const char* style = settings->text_font_italic ? "italic" : "normal";
+        // Show shadow as a subtle background color on the text
+        const char* fg = settings->tool_shadow[3] ? "#bbbbbb" : "#cccccc";
+        const char* bg_attr = settings->tool_shadow[3] ? " background='#1a1a1a'" : "";
+        char markup[512];
+        snprintf(markup, sizeof(markup),
+            "<span font_family='%s' font_size='%dpt' font_weight='%s' font_style='%s' foreground='%s'%s>"
+            "Sample Text\n0123456789</span>", fam, sz, weight, style, fg, bg_attr);
+        gtk_label_set_markup(GTK_LABEL(sample), markup);
+    }
+}
+
+// Helper: create a bold label
+static GtkWidget* create_bold_label(const char* text) {
+    GtkWidget* label = gtk_label_new(NULL);
+    char* markup = g_markup_printf_escaped("<b>%s</b>", text);
+    gtk_label_set_markup(GTK_LABEL(label), markup);
+    g_free(markup);
+    gtk_widget_set_halign(label, GTK_ALIGN_START);
+    return label;
+}
+
+// Refresh all stored tool palette grids after universal color change
+static void refresh_all_tool_palettes(MainWindow* win) {
+    // tool_color indices: 0=arrow, 1=box, 2=circle, 3=text, 4=line, 5=border
+    const char* grid_keys[] = {
+        "palette-grid-0", "palette-grid-1", "palette-grid-2",
+        "palette-grid-3", "palette-grid-4", "palette-grid-5"
+    };
+    for (int i = 0; i < 6; i++) {
+        GtkWidget* grid = safe_get_data(win->window, grid_keys[i], "refresh_all_tool_palettes");
+        if (grid && GTK_IS_WIDGET(grid)) {
+            update_palette_checks(grid, i, win);
+        }
+    }
+}
+
+// Callback: Universal Settings apply to all tools
+static void on_universal_color_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
+    (void)widget; (void)event;
+    PaletteClickData* pcd = (PaletteClickData*)data;
+    Settings* settings = safe_get_data(pcd->win->window, "settings", "on_universal_color_clicked");
+    if (!settings) return;
+    // Apply to all 6 tool colors
+    for (int i = 0; i < 6; i++) {
+        settings->tool_colors[i] = palette_colors[pcd->palette_idx];
+    }
+    save_settings(settings);
+    MainWindowData* win_data = safe_get_data(pcd->win->window, "window-data", "on_universal_color_clicked");
+    if (win_data) {
+        win_data->current_tool.color = palette_colors[pcd->palette_idx];
+    }
+    // Refresh the universal palette check marks
+    update_palette_checks(pcd->grid, pcd->tool_color_idx, pcd->win);
+    // Refresh ALL individual tool palettes
+    refresh_all_tool_palettes(pcd->win);
+}
+
+static void on_universal_width_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_universal_width_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_universal_width_changed");
+    if (!settings) return;
+    double val = gtk_spin_button_get_value(GTK_SPIN_BUTTON(widget));
+    for (int i = 0; i < 5; i++) settings->tool_widths[i] = val;
+    save_settings(settings);
+    if (win_data) win_data->current_tool.line_width = val;
+}
+
+static void on_universal_shadow_toggled(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_universal_shadow_toggled");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_universal_shadow_toggled");
+    if (!settings) return;
+    gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+    for (int i = 0; i < 6; i++) settings->tool_shadow[i] = active;
+    save_settings(settings);
+    if (win_data) win_data->current_tool.shadow = active;
+}
+
+static void on_universal_shadow_intensity_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_universal_shadow_intensity_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_universal_shadow_intensity_changed");
+    if (!settings) return;
+    double val = gtk_range_get_value(GTK_RANGE(widget));
+    for (int i = 0; i < 6; i++) settings->tool_shadow_intensity[i] = val;
+    save_settings(settings);
+    if (win_data) win_data->current_tool.shadow_intensity = val;
+}
+
+// Helper: create a tool section (color circles + width + shadow) in compact form
+static GtkWidget* create_tool_section(const char* name, int color_idx, int width_idx,
+                                       int shadow_idx, MainWindow* win, GList** alloc_list) {
+    Settings* settings = safe_get_data(win->window, "settings", "create_tool_section");
+
+    GtkWidget* section = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_bottom(section, 14);
+
+    // Bold title
+    gtk_box_pack_start(GTK_BOX(section), create_bold_label(name), FALSE, FALSE, 2);
+
+    // Color circles row
+    GtkWidget* color_section = create_tool_color_section(NULL, color_idx, win, alloc_list);
+    GtkWidget* inner = gtk_bin_get_child(GTK_BIN(color_section));
+    g_object_ref(inner);
+    gtk_container_remove(GTK_CONTAINER(color_section), inner);
+    gtk_box_pack_start(GTK_BOX(section), inner, FALSE, FALSE, 0);
+    g_object_unref(inner);
+    gtk_widget_destroy(color_section);
+
+    // Width + Shadow + Intensity all on one row
+    if (width_idx >= 0) {
+        GtkWidget* opts_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+
+        // Width
+        GtkWidget* wlabel = gtk_label_new("Width:");
+        GtkWidget* wspin = gtk_spin_button_new_with_range(1, 10, 0.5);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(wspin), settings ? settings->tool_widths[width_idx] : 2.0);
+        g_object_set_data(G_OBJECT(wspin), "width-idx", GINT_TO_POINTER(width_idx));
+        g_signal_connect(wspin, "value-changed", G_CALLBACK(on_tool_width_changed), win);
+        gtk_box_pack_start(GTK_BOX(opts_row), wlabel, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(opts_row), wspin, FALSE, FALSE, 0);
+
+        // Shadow toggle + intensity slider on same row
+        GtkWidget* shadow_check = gtk_check_button_new_with_label("Shadow");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(shadow_check),
+                                     settings ? settings->tool_shadow[shadow_idx] : false);
+        g_object_set_data(G_OBJECT(shadow_check), "shadow-idx", GINT_TO_POINTER(shadow_idx));
+        g_signal_connect(shadow_check, "toggled", G_CALLBACK(on_shadow_toggled), win);
+        gtk_box_pack_start(GTK_BOX(opts_row), shadow_check, FALSE, FALSE, 4);
+
+        GtkWidget* int_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.1);
+        gtk_scale_set_draw_value(GTK_SCALE(int_scale), FALSE);
+        gtk_widget_set_size_request(int_scale, 70, -1);
+        gtk_range_set_value(GTK_RANGE(int_scale),
+                            settings ? settings->tool_shadow_intensity[shadow_idx] : 0.4);
+        g_object_set_data(G_OBJECT(int_scale), "shadow-idx", GINT_TO_POINTER(shadow_idx));
+        g_signal_connect(int_scale, "value-changed", G_CALLBACK(on_shadow_intensity_changed), win);
+        gtk_box_pack_start(GTK_BOX(opts_row), int_scale, TRUE, TRUE, 0);
+
+        gtk_box_pack_start(GTK_BOX(section), opts_row, FALSE, FALSE, 0);
+    }
+
+    return section;
 }
 
 static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
@@ -1993,70 +2311,144 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 
-    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_set_margin_start(vbox, 10);
-    gtk_widget_set_margin_end(vbox, 10);
-    gtk_widget_set_margin_top(vbox, 10);
-    gtk_widget_set_margin_bottom(vbox, 10);
-    gtk_container_add(GTK_CONTAINER(scroll), vbox);
+    GtkWidget* page_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_margin_start(page_box, 12);
+    gtk_widget_set_margin_end(page_box, 12);
+    gtk_widget_set_margin_top(page_box, 8);
+    gtk_widget_set_margin_bottom(page_box, 8);
+    gtk_container_add(GTK_CONTAINER(scroll), page_box);
 
     GList* alloc_list = NULL;
-
     Settings* settings = safe_get_data(win->window, "settings", "create_colors_page");
 
-    // Tools with width + color: Arrow, Box, Circle, Line
-    const char* width_tool_names[] = {"Arrow", "Box", "Circle", "Line"};
-    const int width_color_map[] = {0, 1, 2, 4};  // indices into tool_colors
-    const char* width_labels[] = {"Width:", "Width:", "Width:", "Width:"};
-    double width_max[] = {10.0, 10.0, 10.0, 10.0};
+    // === Universal Setting (top, full width) ===
+    GtkWidget* uni_sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+    gtk_widget_set_margin_bottom(uni_sec, 4);
 
-    for (int i = 0; i < 4; i++) {
-        GtkWidget* frame = gtk_frame_new(width_tool_names[i]);
-        GtkWidget* fbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-        gtk_container_set_border_width(GTK_CONTAINER(fbox), 8);
-        gtk_container_add(GTK_CONTAINER(frame), fbox);
+    // Universal checkbox with bold label — enables/disables the universal controls
+    GtkWidget* uni_header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* uni_check = gtk_check_button_new();
+    GtkWidget* uni_title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(uni_title), "<b>Universal Setting</b>");
+    gtk_box_pack_start(GTK_BOX(uni_header), uni_check, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_header), uni_title, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_sec), uni_header, FALSE, FALSE, 0);
 
-        // Width spinner row
-        GtkWidget* wrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        GtkWidget* wlabel = gtk_label_new(width_labels[i]);
-        gtk_widget_set_halign(wlabel, GTK_ALIGN_START);
-        gtk_widget_set_size_request(wlabel, 80, -1);
-        GtkWidget* wspin = gtk_spin_button_new_with_range(1, width_max[i], 0.5);
-        gtk_spin_button_set_value(GTK_SPIN_BUTTON(wspin), settings ? settings->tool_widths[i] : 2.0);
-        g_object_set_data(G_OBJECT(wspin), "width-idx", GINT_TO_POINTER(i));
-        g_signal_connect(wspin, "value-changed", G_CALLBACK(on_tool_width_changed), win);
-        gtk_box_pack_start(GTK_BOX(wrow), wlabel, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(wrow), wspin, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(fbox), wrow, FALSE, FALSE, 0);
+    GtkWidget* uni_desc = gtk_label_new("Enable to apply settings to all tools at once");
+    gtk_widget_set_halign(uni_desc, GTK_ALIGN_START);
+    gtk_widget_set_opacity(uni_desc, 0.5);
+    gtk_widget_set_margin_start(uni_desc, 24);
+    gtk_box_pack_start(GTK_BOX(uni_sec), uni_desc, FALSE, FALSE, 0);
 
-        // Color palette grid
-        GtkWidget* color_section = create_tool_color_section(NULL, width_color_map[i], win, &alloc_list);
-        // Extract the grid from the frame returned by create_tool_color_section and add directly
-        GtkWidget* inner = gtk_bin_get_child(GTK_BIN(color_section));
-        g_object_ref(inner);
-        gtk_container_remove(GTK_CONTAINER(color_section), inner);
-        gtk_box_pack_start(GTK_BOX(fbox), inner, FALSE, FALSE, 0);
-        g_object_unref(inner);
-        gtk_widget_destroy(color_section);
+    // Wrap universal controls in a container toggled by checkbox
+    GtkWidget* uni_controls = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+    gtk_widget_set_sensitive(uni_controls, FALSE);
+    g_object_set_data(G_OBJECT(uni_check), "uni-controls", uni_controls);
+    g_signal_connect(uni_check, "toggled", G_CALLBACK(on_universal_check_toggled), NULL);
 
-        gtk_box_pack_start(GTK_BOX(vbox), frame, FALSE, FALSE, 0);
+    GtkWidget* uni_color = create_tool_color_section(NULL, 0, win, &alloc_list);
+    GtkWidget* uni_inner = gtk_bin_get_child(GTK_BIN(uni_color));
+    g_object_ref(uni_inner);
+    gtk_container_remove(GTK_CONTAINER(uni_color), uni_inner);
+    GList* uni_children = gtk_container_get_children(GTK_CONTAINER(uni_inner));
+    for (GList* l = uni_children; l; l = l->next) {
+        GtkWidget* child = GTK_WIDGET(l->data);
+        int ci = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child), "palette-idx"));
+        PaletteClickData* upcd = g_new0(PaletteClickData, 1);
+        upcd->win = win; upcd->tool_color_idx = 0; upcd->palette_idx = ci; upcd->grid = uni_inner;
+        alloc_list = g_list_append(alloc_list, upcd);
+        g_signal_handlers_disconnect_by_func(child, G_CALLBACK(on_palette_color_clicked), NULL);
+        g_signal_connect(child, "button-press-event", G_CALLBACK(on_universal_color_clicked), upcd);
     }
+    g_list_free(uni_children);
+    gtk_box_pack_start(GTK_BOX(uni_controls), uni_inner, FALSE, FALSE, 0);
+    g_object_unref(uni_inner);
+    gtk_widget_destroy(uni_color);
 
-    // Text tool section (color only, no width)
-    GtkWidget* text_color_section = create_tool_color_section("Text Color", 3, win, &alloc_list);
-    gtk_box_pack_start(GTK_BOX(vbox), text_color_section, FALSE, FALSE, 0);
+    GtkWidget* uni_opts = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* uwl = gtk_label_new("Width:");
+    GtkWidget* uws = gtk_spin_button_new_with_range(1, 10, 0.5);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(uws), settings ? settings->tool_widths[0] : 2.0);
+    g_signal_connect(uws, "value-changed", G_CALLBACK(on_universal_width_changed), win);
+    GtkWidget* usc = gtk_check_button_new_with_label("Shadow");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(usc), settings ? settings->tool_shadow[0] : false);
+    g_signal_connect(usc, "toggled", G_CALLBACK(on_universal_shadow_toggled), win);
+    GtkWidget* usl = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.1);
+    gtk_scale_set_draw_value(GTK_SCALE(usl), FALSE);
+    gtk_widget_set_size_request(usl, 60, -1);
+    gtk_range_set_value(GTK_RANGE(usl), settings ? settings->tool_shadow_intensity[0] : 0.4);
+    g_signal_connect(usl, "value-changed", G_CALLBACK(on_universal_shadow_intensity_changed), win);
+    gtk_box_pack_start(GTK_BOX(uni_opts), uwl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_opts), uws, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_opts), usc, FALSE, FALSE, 4);
+    gtk_box_pack_start(GTK_BOX(uni_opts), usl, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_controls), uni_opts, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(uni_sec), uni_controls, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(page_box), uni_sec, FALSE, FALSE, 0);
 
-    GtkWidget* text_frame = gtk_frame_new("Text Settings");
-    GtkWidget* text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    gtk_container_set_border_width(GTK_CONTAINER(text_box), 8);
-    gtk_container_add(GTK_CONTAINER(text_frame), text_box);
+    // Separator
+    GtkWidget* sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 4);
+    gtk_widget_set_margin_bottom(sep, 8);
+    gtk_box_pack_start(GTK_BOX(page_box), sep, FALSE, FALSE, 0);
 
-    // Font family
-    GtkWidget* family_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget* family_label = gtk_label_new("Font:");
-    gtk_widget_set_size_request(family_label, 50, -1);
-    gtk_widget_set_halign(family_label, GTK_ALIGN_START);
-    GtkWidget* family_combo = gtk_combo_box_text_new();
+    // === 3x3 tool settings grid ===
+    GtkWidget* tools_grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(tools_grid), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(tools_grid), 16);
+    gtk_grid_set_column_homogeneous(GTK_GRID(tools_grid), TRUE);
+
+    // Row 0: Line, Arrow, Box
+    gtk_grid_attach(GTK_GRID(tools_grid), create_tool_section("Line",   4, 3, 4, win, &alloc_list), 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(tools_grid), create_tool_section("Arrow",  0, 0, 0, win, &alloc_list), 1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(tools_grid), create_tool_section("Box",    1, 1, 1, win, &alloc_list), 2, 0, 1, 1);
+
+    // Row 1: Circle, Border, Blur
+    gtk_grid_attach(GTK_GRID(tools_grid), create_tool_section("Circle", 2, 2, 2, win, &alloc_list), 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(tools_grid), create_tool_section("Border", 5, 4, 5, win, &alloc_list), 1, 1, 1, 1);
+
+    // Blur section (special — has block size instead of width)
+    GtkWidget* blur_sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+    gtk_widget_set_margin_bottom(blur_sec, 14);
+    gtk_box_pack_start(GTK_BOX(blur_sec), create_bold_label("Blur"), FALSE, FALSE, 0);
+    GtkWidget* blur_desc = gtk_label_new("Pixelate region");
+    gtk_widget_set_halign(blur_desc, GTK_ALIGN_START);
+    gtk_widget_set_opacity(blur_desc, 0.5);
+    gtk_box_pack_start(GTK_BOX(blur_sec), blur_desc, FALSE, FALSE, 0);
+    GtkWidget* blur_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* blur_label = gtk_label_new("Intensity:");
+    GtkWidget* blur_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 4, 32, 2);
+    gtk_scale_set_draw_value(GTK_SCALE(blur_scale), TRUE);
+    gtk_widget_set_size_request(blur_scale, 80, -1);
+    gtk_range_set_value(GTK_RANGE(blur_scale), settings ? settings->blur_block_size : 10);
+    g_signal_connect(blur_scale, "value-changed", G_CALLBACK(on_blur_size_changed), win);
+    gtk_box_pack_start(GTK_BOX(blur_row), blur_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(blur_row), blur_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(blur_sec), blur_row, FALSE, FALSE, 0);
+    gtk_grid_attach(GTK_GRID(tools_grid), blur_sec, 2, 1, 1, 1);
+
+    gtk_box_pack_start(GTK_BOX(page_box), tools_grid, FALSE, FALSE, 0);
+
+    // === Text section (full width, below grid) ===
+    GtkWidget* sep2 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep2, 6);
+    gtk_widget_set_margin_bottom(sep2, 10);
+    gtk_box_pack_start(GTK_BOX(page_box), sep2, FALSE, FALSE, 0);
+
+    GtkWidget* text_sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_box_pack_start(GTK_BOX(text_sec), create_bold_label("Text"), FALSE, FALSE, 2);
+
+    // Row 1: Color circles
+    GtkWidget* tc = create_tool_color_section(NULL, 3, win, &alloc_list);
+    GtkWidget* tci = gtk_bin_get_child(GTK_BIN(tc));
+    g_object_ref(tci); gtk_container_remove(GTK_CONTAINER(tc), tci);
+    gtk_box_pack_start(GTK_BOX(text_sec), tci, FALSE, FALSE, 2);
+    g_object_unref(tci); gtk_widget_destroy(tc);
+
+    // Row 2: Font family
+    GtkWidget* fr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* fl = gtk_label_new("Font:");
+    GtkWidget* fc = gtk_combo_box_text_new();
     const char* font_list[] = {
         "Arial", "Helvetica", "Sans", "Verdana", "Tahoma",
         "Times New Roman", "Serif", "Georgia",
@@ -2064,49 +2456,78 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
         "Impact", "Comic Sans MS", "Trebuchet MS",
         "Ubuntu", "Noto Sans", "DejaVu Sans", "Liberation Sans"
     };
-    int active_idx = 0;
-    const char* current_font = settings ? settings->text_font_family : "Arial";
+    int ai = 0;
+    const char* cf = settings ? settings->text_font_family : "Arial";
     for (int fi = 0; fi < 18; fi++) {
-        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(family_combo), font_list[fi]);
-        if (g_ascii_strcasecmp(font_list[fi], current_font) == 0) active_idx = fi;
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fc), font_list[fi]);
+        if (g_ascii_strcasecmp(font_list[fi], cf) == 0) ai = fi;
     }
-    gtk_combo_box_set_active(GTK_COMBO_BOX(family_combo), active_idx);
-    g_object_set_data(G_OBJECT(family_combo), "font-key", (gpointer)"family");
-    g_signal_connect(family_combo, "changed", G_CALLBACK(on_text_font_changed), win);
-    gtk_box_pack_start(GTK_BOX(family_row), family_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(family_row), family_combo, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(text_box), family_row, FALSE, FALSE, 0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(fc), ai);
+    g_object_set_data(G_OBJECT(fc), "font-key", (gpointer)"family");
+    g_signal_connect(fc, "changed", G_CALLBACK(on_text_font_changed), win);
+    gtk_widget_set_size_request(fc, 160, -1);
+    gtk_box_pack_start(GTK_BOX(fr), fl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(fr), fc, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text_sec), fr, FALSE, FALSE, 2);
 
-    // Font size
-    GtkWidget* size_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget* size_label = gtk_label_new("Size:");
-    gtk_widget_set_size_request(size_label, 50, -1);
-    gtk_widget_set_halign(size_label, GTK_ALIGN_START);
-    GtkWidget* size_spin = gtk_spin_button_new_with_range(6, 72, 1);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), settings ? settings->text_font_size : 14.0);
-    g_object_set_data(G_OBJECT(size_spin), "font-key", (gpointer)"size");
-    g_signal_connect(size_spin, "value-changed", G_CALLBACK(on_text_font_changed), win);
-    gtk_box_pack_start(GTK_BOX(size_row), size_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(size_row), size_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(text_box), size_row, FALSE, FALSE, 0);
+    // Row 3: Size + B + I
+    GtkWidget* sr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* sll = gtk_label_new("Size:");
+    GtkWidget* ss = gtk_spin_button_new_with_range(6, 72, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ss), settings ? settings->text_font_size : 15.0);
+    g_object_set_data(G_OBJECT(ss), "font-key", (gpointer)"size");
+    g_signal_connect(ss, "value-changed", G_CALLBACK(on_text_font_changed), win);
+    GtkWidget* bcc = gtk_check_button_new_with_label("B");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bcc), settings ? settings->text_font_bold : true);
+    g_object_set_data(G_OBJECT(bcc), "font-key", (gpointer)"bold");
+    g_signal_connect(bcc, "toggled", G_CALLBACK(on_text_font_changed), win);
+    GtkWidget* icc = gtk_check_button_new_with_label("I");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(icc), settings ? settings->text_font_italic : false);
+    g_object_set_data(G_OBJECT(icc), "font-key", (gpointer)"italic");
+    g_signal_connect(icc, "toggled", G_CALLBACK(on_text_font_changed), win);
+    gtk_box_pack_start(GTK_BOX(sr), sll, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sr), ss, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sr), bcc, FALSE, FALSE, 4);
+    gtk_box_pack_start(GTK_BOX(sr), icc, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text_sec), sr, FALSE, FALSE, 2);
 
-    // Bold / Italic
-    GtkWidget* style_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget* bold_check = gtk_check_button_new_with_label("Bold");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bold_check), settings ? settings->text_font_bold : false);
-    g_object_set_data(G_OBJECT(bold_check), "font-key", (gpointer)"bold");
-    g_signal_connect(bold_check, "toggled", G_CALLBACK(on_text_font_changed), win);
-    GtkWidget* italic_check = gtk_check_button_new_with_label("Italic");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(italic_check), settings ? settings->text_font_italic : false);
-    g_object_set_data(G_OBJECT(italic_check), "font-key", (gpointer)"italic");
-    g_signal_connect(italic_check, "toggled", G_CALLBACK(on_text_font_changed), win);
-    gtk_box_pack_start(GTK_BOX(style_row), bold_check, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(style_row), italic_check, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(text_box), style_row, FALSE, FALSE, 0);
+    // Row 4: Shadow + intensity slider
+    GtkWidget* tsr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* tsc2 = gtk_check_button_new_with_label("Shadow");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(tsc2), settings ? settings->tool_shadow[3] : false);
+    g_object_set_data(G_OBJECT(tsc2), "shadow-idx", GINT_TO_POINTER(3));
+    g_signal_connect(tsc2, "toggled", G_CALLBACK(on_shadow_toggled), win);
+    g_signal_connect(tsc2, "toggled", G_CALLBACK(on_text_font_changed), win);
+    g_object_set_data(G_OBJECT(tsc2), "font-key", (gpointer)"shadow-refresh");
+    GtkWidget* tss = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.1);
+    gtk_scale_set_draw_value(GTK_SCALE(tss), FALSE);
+    gtk_widget_set_size_request(tss, 80, -1);
+    gtk_range_set_value(GTK_RANGE(tss), settings ? settings->tool_shadow_intensity[3] : 0.4);
+    g_object_set_data(G_OBJECT(tss), "shadow-idx", GINT_TO_POINTER(3));
+    g_signal_connect(tss, "value-changed", G_CALLBACK(on_shadow_intensity_changed), win);
+    gtk_box_pack_start(GTK_BOX(tsr), tsc2, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(tsr), tss, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text_sec), tsr, FALSE, FALSE, 2);
 
-    gtk_box_pack_start(GTK_BOX(vbox), text_frame, FALSE, FALSE, 0);
+    // Row 5: Sample text preview (reflects font, size, bold, italic, shadow)
+    GtkWidget* sample_label = gtk_label_new(NULL);
+    {
+        const char* sfam = settings ? settings->text_font_family : "Arial";
+        int ssz = settings ? (int)settings->text_font_size : 15;
+        const char* swt = (settings && settings->text_font_bold) ? "bold" : "normal";
+        const char* sst = (settings && settings->text_font_italic) ? "italic" : "normal";
+        char smarkup[512];
+        snprintf(smarkup, sizeof(smarkup),
+            "<span font_family='%s' font_size='%dpt' font_weight='%s' font_style='%s' foreground='#cccccc'>"
+            "Sample Text\n0123456789</span>", sfam, ssz > 18 ? 18 : ssz, swt, sst);
+        gtk_label_set_markup(GTK_LABEL(sample_label), smarkup);
+    }
+    gtk_widget_set_halign(sample_label, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(sample_label, 6);
+    safe_set_data(win->window, "sample-text-label", sample_label, "create_colors_page");
+    gtk_box_pack_start(GTK_BOX(text_sec), sample_label, FALSE, FALSE, 0);
 
-    // alloc_list is freed when the widget tree is destroyed (small leak, acceptable)
+    gtk_box_pack_start(GTK_BOX(page_box), text_sec, FALSE, FALSE, 0);
 
     GtkWidget* tools_tab_label = gtk_label_new("Tools");
     gtk_widget_set_halign(tools_tab_label, GTK_ALIGN_CENTER);
@@ -2714,6 +3135,8 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     data->dragging_paste = false;
     data->paste_drag_ox = 0;
     data->paste_drag_oy = 0;
+    data->paste_overlays = NULL;
+    data->dragging_overlay = NULL;
 
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");
@@ -2786,6 +3209,14 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "frame > label { color: #cccccc; }"
         "radiobutton label, checkbutton label { color: #cccccc; font-size: 13px; }"
         "entry { background-color: #3d3d3d; color: #e0e0e0; border-color: #555555; }"
+        "spinbutton { background-color: #3d3d3d; color: #e0e0e0; border-color: #555555; font-size: 10px; min-height: 16px; padding: 0 1px; }"
+        "spinbutton button { min-height: 10px; min-width: 10px; padding: 0; margin: 0; font-size: 8px; color: #cccccc; background: #3d3d3d; border: none; }"
+        "spinbutton button:hover { color: #ffffff; background: #4d4d4d; }"
+        "scale { min-height: 12px; }"
+        "scale slider { min-height: 10px; min-width: 10px; background-color: #888888; border-radius: 5px; }"
+        "scale trough { background-color: #444444; min-height: 4px; border-radius: 2px; }"
+        "scale highlight { background-color: #e0e0e0; min-height: 4px; border-radius: 2px; }"
+        "combobox { font-size: 12px; }"
         "separator { background-color: #555555; }",
         -1, NULL);
     
@@ -2805,7 +3236,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create buttons with icons and labels
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
+        "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Border", "Blur", "Save"
     };
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
@@ -2818,10 +3249,12 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         {'t', TOOL_MARQUEE},    // 6: Select
         {'a', 1},               // 7: Flatten
         {'a', 2},               // 8: Copy
-        {'a', 3}                // 9: Save
+        {'t', TOOL_BORDER},     // 9: Border
+        {'t', TOOL_BLUR},       // 10: Blur
+        {'a', 3}                // 11: Save
     };
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 12; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -2858,7 +3291,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
         } else if (i == 8) { // Copy
             g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 9) { // Save
+        } else if (i == 11) { // Save
             g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
@@ -3027,11 +3460,13 @@ void main_window_cleanup(MainWindow* win) {
             g_free(data->current_filename);
             data->current_filename = NULL;
 
-            // Free paste overlay
-            if (data->paste_overlay) {
-                cairo_surface_destroy(data->paste_overlay);
-                data->paste_overlay = NULL;
+            // Free all paste overlays
+            if (data->paste_overlays) {
+                g_list_free_full(data->paste_overlays, (GDestroyNotify)paste_overlay_free);
+                data->paste_overlays = NULL;
             }
+            data->paste_overlay = NULL;
+            data->dragging_overlay = NULL;
 
             // Free both annotations list and undo stack
             g_list_free_full(data->annotations, (GDestroyNotify)annotation_free);

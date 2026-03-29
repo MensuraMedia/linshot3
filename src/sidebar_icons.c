@@ -189,6 +189,43 @@ static void draw_save(cairo_t* cr, double x, double y) {
     cairo_stroke(cr);
 }
 
+static void draw_border(cairo_t* cr, double x, double y) {
+    // Double rectangle (border/frame icon)
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    // Outer rectangle
+    cairo_rectangle(cr, x+S(2), y+S(2), S(16), S(16));
+    cairo_stroke(cr);
+
+    // Inner rectangle (inset)
+    cairo_rectangle(cr, x+S(5), y+S(5), S(10), S(10));
+    cairo_stroke(cr);
+}
+
+static void draw_blur(cairo_t* cr, double x, double y) {
+    // Pixelate/mosaic icon: small grid of squares
+    double lw = 1.0;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+
+    double cell = S(4.5);
+    double ox = x + S(2);
+    double oy = y + S(2);
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            double shade = ((r + c) % 2 == 0) ? 0.8 : 0.4;
+            cairo_set_source_rgba(cr, shade, shade, shade, 1.0);
+            cairo_rectangle(cr, ox + c * cell, oy + r * cell, cell, cell);
+            cairo_fill(cr);
+        }
+    }
+}
+
 // Dispatch table
 typedef void (*IconDrawFunc)(cairo_t*, double, double);
 
@@ -202,6 +239,8 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_select,
     draw_flatten,
     draw_copy,
+    draw_border,
+    draw_blur,
     draw_save
 };
 

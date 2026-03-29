@@ -7,21 +7,39 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 
 ## Features
 
-- **Area Capture** — Click and drag overlay with visual feedback, crosshair cursor, and live dimension display
-- **Annotation Tools** — Line, Arrow, Box, Circle, Text, and Freehand drawing
+### Annotation Tools
+- **Line** — Straight lines with configurable width and color
+- **Arrow** — Filled arrows with proportional shaft and head, Shift+drag for 45° snap
+- **Box** — Rectangles with configurable width, Ctrl+drag to constrain to square
+- **Circle** — Ellipses with configurable width, Ctrl+drag to constrain to circle
+- **Text** — Customizable font (18 families), size, bold, italic with live preview
+- **Freehand** — Free-form drawing
+- **Border** — Decorative double-border frames around selected regions
+- **Blur** — Pixelate/mosaic effect to redact sensitive areas, adjustable intensity
 - **Marquee Selection** — Select and copy regions with dashed marching-ants box
-- **Paste & Position** — Ctrl+V pastes images as movable overlays, Flatten to commit
-- **Per-Tool Settings** — Independent color palettes and line widths for each tool
-- **Text Customization** — Font family (18 fonts), size, bold, and italic options
+
+### Tool Settings
+- **Per-Tool Settings** — Independent color palettes, line widths, and shadow options for each tool
+- **Universal Setting** — Apply color, width, and shadow to all tools at once with a single checkbox
+- **Shadow Effects** — Diffused multi-pass drop shadows with adjustable intensity for all tools
+- **Color Swatches** — 12-color circular palette with soft glow selection indicator
+- **Text Preview** — Live sample text that updates with font, size, bold, italic, and shadow changes
+
+### Capture & Edit
+- **Area Capture** — Click and drag overlay with visual feedback, crosshair cursor, and live dimension display
+- **Multi-Paste** — Ctrl+V pastes images as movable overlays; paste multiple times for independent overlays
+- **Flatten** — Commit all overlays and annotations permanently into the image
 - **Screenshot History** — Thumbnail grid of all captured screenshots
-- **System Tray** — Minimize to tray, right-click menu for quick capture
 - **Auto Clipboard** — Every capture is automatically copied to clipboard and saved
 - **Sequential Save** — Save dialog defaults to original filename with _1, _2, _3 suffix
-- **Keyboard Shortcuts** — Ctrl+S, Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+N, Ctrl+A, Delete, Escape
-- **Modifier Keys** — Shift+drag snaps lines/arrows to 45° angles, Ctrl+drag constrains shapes to squares/circles
+
+### Application
+- **Dark Theme** — Consistent dark UI across sidebar, tabs, and all settings
+- **System Tray** — Minimize to tray, right-click menu for quick capture
 - **Configurable Hotkey** — Set as default screenshot app with PrintScreen remapping
 - **Single Instance** — Lock file prevents duplicate launches, signals existing instance
-- **Dark Theme** — Consistent dark UI across all tabs
+- **Persistent Settings** — All tool colors, widths, shadows, and text options saved between sessions
+- **5 Tabs** — Screenshot, History, Tools, Settings, About
 
 ## Screenshots
 
@@ -73,14 +91,31 @@ sudo apt remove linshot
 | Ctrl+N | New capture |
 | Ctrl+S | Save with annotations |
 | Ctrl+C | Copy to clipboard (selection or full image) |
-| Ctrl+V | Paste from clipboard as movable overlay |
+| Ctrl+V | Paste from clipboard as movable overlay (multi-paste supported) |
 | Ctrl+Z | Undo last annotation |
 | Ctrl+A | Select all and copy |
 | Shift+Drag | Snap Line/Arrow to 45° angles |
 | Ctrl+Drag | Constrain Box/Circle/Select to square/circle |
-| Escape | Clear selection or discard paste |
+| Escape | Clear selection or discard all paste overlays |
 | Delete | Erase content inside selection |
 | PrintScreen | Capture (configurable in Settings) |
+
+## Sidebar Tools
+
+| Tool | Description |
+|------|-------------|
+| LinShot | Take a new screenshot |
+| Line | Draw straight lines |
+| Arrow | Draw filled arrows |
+| Box | Draw rectangles |
+| Circle | Draw ellipses |
+| Text | Add text annotations |
+| Select | Marquee selection tool |
+| Flatten | Commit overlays and annotations to image |
+| Copy | Copy image or selection to clipboard |
+| Border | Draw decorative double-border frames |
+| Blur | Pixelate/mosaic regions to redact content |
+| Save | Save image with annotations |
 
 ## License
 
