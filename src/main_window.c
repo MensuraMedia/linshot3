@@ -2798,9 +2798,6 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_halign(screenshot_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), screenshot_page, screenshot_label);
 
-    // Create colors tab (second position, right after Screenshot)
-    create_colors_page(win, notebook);
-
     // Create scrolled window for the canvas
     GtkWidget* canvas_scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(canvas_scroll),
@@ -2875,6 +2872,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Store flow box in window data for history updates
     win->history_flow_box = flow_box;
     
+    // Create colors tab (before Settings)
+    create_colors_page(win, notebook);
+
     // Create settings tab
     create_settings_page(win, notebook);
 

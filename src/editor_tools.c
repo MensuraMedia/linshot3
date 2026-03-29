@@ -55,14 +55,14 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
     switch (annotation->type) {
         case TOOL_ARROW:
             {
-                // Bold arrow: narrow shaft with rounded tail, solid triangular head
+                // Narrow shaft with rounded tail flowing into solid triangular head
+                // Drawn as one continuous path to avoid seams
                 double dx = annotation->bounds.x2 - annotation->bounds.x1;
                 double dy = annotation->bounds.y2 - annotation->bounds.y1;
                 double angle = atan2(dy, dx);
                 double length = sqrt(dx * dx + dy * dy);
                 if (length < 2.0) break;
 
-                // Proportional sizing
                 double shaft_half = fmin(fmax(length * 0.02, 1.5), 3.5);
                 double head_length = fmin(fmax(length * 0.25, 14.0), 30.0);
                 double head_half = head_length * 0.55;
@@ -70,37 +70,27 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
                 double sin_a = sin(angle);
                 double cos_a = cos(angle);
 
-                // Tip of the arrow
                 double tip_x = annotation->bounds.x2;
                 double tip_y = annotation->bounds.y2;
-
-                // Where the head meets the shaft
                 double neck_x = tip_x - head_length * cos_a;
                 double neck_y = tip_y - head_length * sin_a;
-
-                // Shaft start (tail)
                 double tail_x = annotation->bounds.x1;
                 double tail_y = annotation->bounds.y1;
 
-                // Perpendicular offsets
                 double sx = sin_a * shaft_half;
                 double sy = cos_a * shaft_half;
                 double hx = sin_a * head_half;
                 double hy = cos_a * head_half;
 
-                // Draw shaft with rounded back end
-                cairo_move_to(cr, neck_x - sx, neck_y + sy);       // neck left
+                // Single continuous path: rounded tail -> left shaft -> left wing -> tip -> right wing -> right shaft -> back to tail
+                cairo_move_to(cr, neck_x - sx, neck_y + sy);       // neck left (shaft edge)
                 cairo_line_to(cr, tail_x - sx, tail_y + sy);       // tail left
-                // Rounded tail cap
-                cairo_arc(cr, tail_x, tail_y, shaft_half, angle + M_PI/2, angle - M_PI/2);
-                cairo_line_to(cr, neck_x + sx, neck_y - sy);       // neck right
-                cairo_close_path(cr);
-                cairo_fill(cr);
-
-                // Draw triangular head
-                cairo_move_to(cr, neck_x - hx, neck_y + hy);       // head left wing
+                cairo_arc(cr, tail_x, tail_y, shaft_half,
+                          angle + M_PI/2, angle - M_PI/2);          // rounded tail cap
+                cairo_line_to(cr, neck_x + sx, neck_y - sy);       // neck right (shaft edge)
+                cairo_line_to(cr, neck_x + hx, neck_y - hy);       // right wing
                 cairo_line_to(cr, tip_x, tip_y);                    // tip
-                cairo_line_to(cr, neck_x + hx, neck_y - hy);       // head right wing
+                cairo_line_to(cr, neck_x - hx, neck_y + hy);       // left wing
                 cairo_close_path(cr);
                 cairo_fill(cr);
             }
