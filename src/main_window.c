@@ -3505,13 +3505,12 @@ static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
     keybinding_unregister(settings->detected_de);
     keybinding_register(settings->detected_de, (KeyBinding)key, binary_path);
 
-    // For X11 fallback (DE_UNKNOWN, DE_KDE): also install GDK event filter
-    if (settings->detected_de == DE_UNKNOWN || settings->detected_de == DE_KDE) {
-        GdkDisplay* display = gdk_display_get_default();
-        GdkScreen* screen = gdk_display_get_default_screen(display);
-        GdkWindow* root = gdk_screen_get_root_window(screen);
-        gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
-    }
+    // Always install GDK event filter on root window for X11 key grab
+    // This works alongside the DE-native binding as a reliable fallback
+    GdkDisplay* display = gdk_display_get_default();
+    GdkScreen* screen = gdk_display_get_default_screen(display);
+    GdkWindow* root = gdk_screen_get_root_window(screen);
+    gdk_window_add_filter(root, (GdkFilterFunc)key_filter_func, win);
 
     g_free(binary_path);
 }
