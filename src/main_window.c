@@ -1436,6 +1436,12 @@ static void show_resize_dialog(MainWindow* win, MainWindowData* win_data) {
     gtk_widget_destroy(dialog);
 }
 
+// Helper callback: button in rotate dialog emits response
+static void rotate_btn_clicked(GtkWidget* btn, gpointer dialog) {
+    int resp = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "resp-id"));
+    gtk_dialog_response(GTK_DIALOG(dialog), resp);
+}
+
 static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
     if (!win_data->current_image) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image");
@@ -1448,64 +1454,27 @@ static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
     GtkWidget* dialog = gtk_dialog_new_with_buttons("Rotate / Flip",
         GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "Cancel", GTK_RESPONSE_CANCEL, NULL);
-    gtk_window_set_default_size(GTK_WINDOW(dialog), 320, -1);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content), 20);
-    gtk_box_set_spacing(GTK_BOX(content), 8);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 16);
+    gtk_box_set_spacing(GTK_BOX(content), 6);
 
-    // 2x2 grid + 1 extra
-    GtkWidget* grid = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 8);
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
-    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
-
+    // Stacked buttons — narrow vertical layout
     const char* labels[] = {
-        "Rotate 90\xC2\xB0 Right", "Rotate 90\xC2\xB0 Left",
-        "Rotate 180\xC2\xB0", "Flip Horizontal"
+        "Rotate 90\xC2\xB0 Right",
+        "Rotate 90\xC2\xB0 Left",
+        "Rotate 180\xC2\xB0",
+        "Flip Horizontal",
+        "Flip Vertical"
     };
-    const int responses[] = {10, 11, 12, 13};
-    for (int i = 0; i < 4; i++) {
+    const int resp_ids[] = {10, 11, 12, 13, 14};
+
+    for (int i = 0; i < 5; i++) {
         GtkWidget* btn = gtk_button_new_with_label(labels[i]);
-        g_object_set_data(G_OBJECT(btn), "resp", GINT_TO_POINTER(responses[i]));
-        g_signal_connect_swapped(btn, "clicked",
-            G_CALLBACK(gtk_dialog_response), dialog);
-        g_object_set_data(G_OBJECT(btn), "resp-val", GINT_TO_POINTER(responses[i]));
-        gtk_grid_attach(GTK_GRID(grid), btn, i % 2, i / 2, 1, 1);
+        g_object_set_data(G_OBJECT(btn), "resp-id", GINT_TO_POINTER(resp_ids[i]));
+        g_signal_connect(btn, "clicked", G_CALLBACK(rotate_btn_clicked), dialog);
+        gtk_box_pack_start(GTK_BOX(content), btn, FALSE, FALSE, 0);
     }
-    gtk_box_pack_start(GTK_BOX(content), grid, FALSE, FALSE, 0);
-
-    // Flip Vertical centered below
-    GtkWidget* flip_v = gtk_button_new_with_label("Flip Vertical");
-    gtk_box_pack_start(GTK_BOX(content), flip_v, FALSE, FALSE, 0);
-
-    // Connect all buttons to emit dialog responses
-    // Re-do connections properly: buttons in the grid need to call gtk_dialog_response
-    GList* children = gtk_container_get_children(GTK_CONTAINER(grid));
-    int resp_idx = 0;
-    for (GList* l = children; l; l = l->next, resp_idx++) {
-        GtkWidget* btn = GTK_WIDGET(l->data);
-        g_signal_handlers_disconnect_by_func(btn, G_CALLBACK(gtk_dialog_response), dialog);
-    }
-    g_list_free(children);
-
-    // Simpler approach: use direct response IDs
-    // Remove grid and use dialog buttons instead
-    gtk_widget_destroy(grid);
-    gtk_widget_destroy(flip_v);
-
-    // Use a 2x2+1 layout with regular buttons that call gtk_dialog_response
-    GtkWidget* grid2 = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(grid2), 10);
-    gtk_grid_set_column_spacing(GTK_GRID(grid2), 10);
-    gtk_grid_set_column_homogeneous(GTK_GRID(grid2), TRUE);
-
-    const char* btn_labels[] = {"Rotate 90\xC2\xB0 Right", "Rotate 90\xC2\xB0 Left",
-                                 "Rotate 180\xC2\xB0", "Flip Horizontal"};
-    const int btn_resp[] = {10, 11, 12, 13};
-    for (int i = 0; i < 4; i++) {
-        gtk_dialog_add_button(GTK_DIALOG(dialog), btn_labels[i], btn_resp[i]);
-    }
-    gtk_dialog_add_button(GTK_DIALOG(dialog), "Flip Vertical", 14);
 
     gtk_widget_show_all(dialog);
     int response = gtk_dialog_run(GTK_DIALOG(dialog));
@@ -4115,9 +4084,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "frame > label { color: #cccccc; }"
         "radiobutton label, checkbutton label { color: #cccccc; font-size: 13px; }"
         "entry { background-color: #3d3d3d; color: #e0e0e0; border-color: #555555; }"
-        "spinbutton { background-color: #3d3d3d; color: #e0e0e0; border-color: #555555; font-size: 10px; min-height: 16px; padding: 0 1px; }"
-        "spinbutton button { min-height: 10px; min-width: 10px; padding: 0; margin: 0; font-size: 8px; color: #cccccc; background: #3d3d3d; border: none; }"
-        "spinbutton button:hover { color: #ffffff; background: #4d4d4d; }"
+        "spinbutton { font-size: 11px; min-height: 18px; padding: 0 2px; }"
+        "spinbutton button { min-height: 8px; min-width: 8px; padding: 0; margin: 0; font-size: 7px; color: #cccccc; }"
+        "spinbutton button:hover { color: #ffffff; }"
         "scale { min-height: 12px; }"
         "scale slider { min-height: 10px; min-width: 10px; background-color: #888888; border-radius: 5px; }"
         "scale trough { background-color: #444444; min-height: 4px; border-radius: 2px; }"
