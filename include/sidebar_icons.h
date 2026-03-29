@@ -24,6 +24,8 @@ typedef enum {
     ICON_BLUR,
     ICON_CROP,
     ICON_RESIZE,
+    ICON_ROTATE,
+    ICON_BRIGHTNESS,
     ICON_SAVE,
     ICON_COUNT
 } SidebarIconType;

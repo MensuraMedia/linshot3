@@ -269,6 +269,37 @@ static void draw_resize(cairo_t* cr, double x, double y) {
     cairo_stroke(cr);
 }
 
+static void draw_rotate(cairo_t* cr, double x, double y) {
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    // Circular arrow (270 degree arc)
+    cairo_arc(cr, x+S(10), y+S(10), S(7), -M_PI * 0.5, M_PI);
+    cairo_stroke(cr);
+    // Arrowhead
+    cairo_move_to(cr, x+S(3), y+S(7));
+    cairo_line_to(cr, x+S(3), y+S(12));
+    cairo_line_to(cr, x+S(7), y+S(10));
+    cairo_close_path(cr);
+    cairo_fill(cr);
+}
+
+static void draw_brightness(cairo_t* cr, double x, double y) {
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    // Sun: circle with rays
+    cairo_arc(cr, x+S(10), y+S(10), S(4), 0, 2*M_PI);
+    cairo_stroke(cr);
+    // 8 rays
+    for (int i = 0; i < 8; i++) {
+        double angle = i * M_PI / 4.0;
+        double inner = S(6);
+        double outer = S(9);
+        cairo_move_to(cr, x+S(10) + cos(angle)*inner, y+S(10) + sin(angle)*inner);
+        cairo_line_to(cr, x+S(10) + cos(angle)*outer, y+S(10) + sin(angle)*outer);
+        cairo_stroke(cr);
+    }
+}
+
 // Dispatch table
 typedef void (*IconDrawFunc)(cairo_t*, double, double);
 
@@ -286,6 +317,8 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_blur,
     draw_crop,
     draw_resize,
+    draw_rotate,
+    draw_brightness,
     draw_save
 };
 

@@ -76,6 +76,8 @@ static void update_image_info(MainWindow* win, MainWindowData* win_data, const c
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
 static void apply_crop(MainWindow* win, MainWindowData* win_data);
 static void show_resize_dialog(MainWindow* win, MainWindowData* win_data);
+static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data);
+static void show_brightness_dialog(MainWindow* win, MainWindowData* win_data);
 static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
@@ -756,7 +758,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         }
 
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur", "Crop", "Resize"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line", "Border", "Blur", "Crop", "Resize", "Rotate", "Brightness"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -826,11 +828,49 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
         
         // Draw current annotation if drawing
         if (win_data->drawing) {
-            Annotation* current = annotation_create(win_data->current_tool.type, &win_data->current_tool);
-            if (current) {
-                current->bounds = win_data->start_point;
-                annotation_draw(current, image_cr);
-                annotation_free(current);
+            if (win_data->current_tool.type == TOOL_CROP) {
+                // Crop preview: dashed box with dimensions, dimmed outside area
+                int cx = MIN(win_data->start_point.x1, win_data->start_point.x2);
+                int cy = MIN(win_data->start_point.y1, win_data->start_point.y2);
+                int cw = abs(win_data->start_point.x2 - win_data->start_point.x1);
+                int ch = abs(win_data->start_point.y2 - win_data->start_point.y1);
+
+                if (cw > 0 && ch > 0) {
+                    // Dim area outside crop
+                    cairo_set_source_rgba(image_cr, 0, 0, 0, 0.4);
+                    cairo_rectangle(image_cr, 0, 0, width, cy);
+                    cairo_fill(image_cr);
+                    cairo_rectangle(image_cr, 0, cy + ch, width, height - cy - ch);
+                    cairo_fill(image_cr);
+                    cairo_rectangle(image_cr, 0, cy, cx, ch);
+                    cairo_fill(image_cr);
+                    cairo_rectangle(image_cr, cx + cw, cy, width - cx - cw, ch);
+                    cairo_fill(image_cr);
+
+                    // Dashed border
+                    double dashes[] = {4.0, 3.0};
+                    cairo_set_dash(image_cr, dashes, 2, 0);
+                    cairo_set_line_width(image_cr, 1.5);
+                    cairo_set_source_rgba(image_cr, 1, 1, 1, 0.9);
+                    cairo_rectangle(image_cr, cx + 0.5, cy + 0.5, cw, ch);
+                    cairo_stroke(image_cr);
+                    cairo_set_dash(image_cr, NULL, 0, 0);
+
+                    // Dimension label
+                    char dim_str[32];
+                    snprintf(dim_str, sizeof(dim_str), "%dx%d", cw, ch);
+                    cairo_set_source_rgba(image_cr, 1, 1, 1, 0.8);
+                    cairo_set_font_size(image_cr, 12);
+                    cairo_move_to(image_cr, cx + 4, cy > 16 ? cy - 4 : cy + ch + 14);
+                    cairo_show_text(image_cr, dim_str);
+                }
+            } else {
+                Annotation* current = annotation_create(win_data->current_tool.type, &win_data->current_tool);
+                if (current) {
+                    current->bounds = win_data->start_point;
+                    annotation_draw(current, image_cr);
+                    annotation_free(current);
+                }
             }
         }
 
@@ -989,8 +1029,11 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
             win_data->selected_text = NULL;
             show_text_dialog(win, win_data, event->x, event->y);
         } else if (win_data->current_tool.type == TOOL_RESIZE) {
-            // Resize opens dialog immediately on click
             show_resize_dialog(win, win_data);
+        } else if (win_data->current_tool.type == TOOL_ROTATE) {
+            show_rotate_dialog(win, win_data);
+        } else if (win_data->current_tool.type == TOOL_BRIGHTNESS) {
+            show_brightness_dialog(win, win_data);
         } else if (win_data->current_tool.type != TOOL_NONE) {
             win_data->selected_text = NULL;  // Deselect text when using other tools
             win_data->drawing = true;
@@ -1259,6 +1302,24 @@ static void apply_crop(MainWindow* win, MainWindowData* win_data) {
     update_image_info(win, win_data, NULL);
 }
 
+// Helper: replace current image with a new pixbuf
+static void replace_image_from_pixbuf(MainWindow* win, MainWindowData* win_data, GdkPixbuf* pb, const char* status_msg) {
+    int new_w = gdk_pixbuf_get_width(pb);
+    int new_h = gdk_pixbuf_get_height(pb);
+    cairo_surface_destroy(win_data->current_image);
+    win_data->current_image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, new_w, new_h);
+    cairo_t* cr = cairo_create(win_data->current_image);
+    gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    win_data->zoom_level = 1.0;
+    g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
+    win_data->annotations = NULL;
+    gtk_widget_queue_draw(win->canvas);
+    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, status_msg);
+    update_image_info(win, win_data, NULL);
+}
+
 static void show_resize_dialog(MainWindow* win, MainWindowData* win_data) {
     if (!win_data->current_image) {
         gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image to resize");
@@ -1268,74 +1329,224 @@ static void show_resize_dialog(MainWindow* win, MainWindowData* win_data) {
     int cur_w = cairo_image_surface_get_width(win_data->current_image);
     int cur_h = cairo_image_surface_get_height(win_data->current_image);
 
-    GtkWidget* dialog = gtk_dialog_new_with_buttons("Resize Image",
-        GTK_WINDOW(win->window),
-        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-        "Cancel", GTK_RESPONSE_CANCEL,
-        "Resize", GTK_RESPONSE_ACCEPT,
-        NULL);
-
+    GtkWidget* dialog = gtk_dialog_new_with_buttons("Resize",
+        GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_ACCEPT, NULL);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content), 15);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
 
     char cur_size[64];
     snprintf(cur_size, sizeof(cur_size), "Current: %dx%d", cur_w, cur_h);
-    GtkWidget* cur_label = gtk_label_new(cur_size);
-    gtk_widget_set_halign(cur_label, GTK_ALIGN_START);
-    gtk_box_pack_start(GTK_BOX(content), cur_label, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(content), gtk_label_new(cur_size), FALSE, FALSE, 4);
 
-    GtkWidget* w_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget* w_label = gtk_label_new("Width:");
+    // Percentage
+    GtkWidget* prow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(prow), gtk_label_new("Scale %:"), FALSE, FALSE, 0);
+    GtkWidget* pct_spin = gtk_spin_button_new_with_range(1, 500, 5);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(pct_spin), 100);
+    gtk_box_pack_start(GTK_BOX(prow), pct_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), prow, FALSE, FALSE, 2);
+
+    // Or exact pixels
+    GtkWidget* sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(content), sep, FALSE, FALSE, 4);
+
+    GtkWidget* drow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(drow), gtk_label_new("W:"), FALSE, FALSE, 0);
     GtkWidget* w_spin = gtk_spin_button_new_with_range(1, 10000, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(w_spin), cur_w);
-    gtk_box_pack_start(GTK_BOX(w_row), w_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(w_row), w_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(content), w_row, FALSE, FALSE, 2);
-
-    GtkWidget* h_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget* h_label = gtk_label_new("Height:");
+    gtk_box_pack_start(GTK_BOX(drow), w_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(drow), gtk_label_new("H:"), FALSE, FALSE, 0);
     GtkWidget* h_spin = gtk_spin_button_new_with_range(1, 10000, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(h_spin), cur_h);
-    gtk_box_pack_start(GTK_BOX(h_row), h_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(h_row), h_spin, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(content), h_row, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(drow), h_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), drow, FALSE, FALSE, 2);
 
     gtk_widget_show_all(dialog);
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-        int new_w = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(w_spin));
-        int new_h = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(h_spin));
-
+        int pct = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(pct_spin));
+        int new_w, new_h;
+        if (pct != 100) {
+            new_w = cur_w * pct / 100;
+            new_h = cur_h * pct / 100;
+        } else {
+            new_w = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(w_spin));
+            new_h = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(h_spin));
+        }
         if (new_w > 0 && new_h > 0 && (new_w != cur_w || new_h != cur_h)) {
-            // Resize using GdkPixbuf for quality interpolation
             GdkPixbuf* pb = gdk_pixbuf_get_from_surface(win_data->current_image, 0, 0, cur_w, cur_h);
             if (pb) {
                 GdkPixbuf* resized = gdk_pixbuf_scale_simple(pb, new_w, new_h, GDK_INTERP_BILINEAR);
                 g_object_unref(pb);
-
                 if (resized) {
-                    cairo_surface_destroy(win_data->current_image);
-                    win_data->current_image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, new_w, new_h);
-                    cairo_t* cr = cairo_create(win_data->current_image);
-                    gdk_cairo_set_source_pixbuf(cr, resized, 0, 0);
-                    cairo_paint(cr);
-                    cairo_destroy(cr);
-                    g_object_unref(resized);
-
-                    win_data->zoom_level = 1.0;
-                    g_list_free_full(win_data->annotations, (GDestroyNotify)annotation_free);
-                    win_data->annotations = NULL;
-
-                    gtk_widget_queue_draw(win->canvas);
                     char msg[64];
                     snprintf(msg, sizeof(msg), "Resized to %dx%d", new_w, new_h);
-                    gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
-                    update_image_info(win, win_data, NULL);
+                    replace_image_from_pixbuf(win, win_data, resized, msg);
+                    g_object_unref(resized);
                 }
             }
         }
     }
+    gtk_widget_destroy(dialog);
+}
 
+static void show_rotate_dialog(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->current_image) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image");
+        return;
+    }
+
+    int cur_w = cairo_image_surface_get_width(win_data->current_image);
+    int cur_h = cairo_image_surface_get_height(win_data->current_image);
+
+    GtkWidget* dialog = gtk_dialog_new_with_buttons("Rotate / Flip",
+        GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel", GTK_RESPONSE_CANCEL, NULL);
+    GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+
+    // Action buttons — each emits a custom dialog response
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 90\xC2\xB0 Right", 10);
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 90\xC2\xB0 Left", 11);
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Rotate 180\xC2\xB0", 12);
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Flip Horizontal", 13);
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Flip Vertical", 14);
+
+    gtk_widget_show_all(dialog);
+    int response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    GdkPixbuf* pb = gdk_pixbuf_get_from_surface(win_data->current_image, 0, 0, cur_w, cur_h);
+    if (!pb) return;
+
+    GdkPixbuf* result = NULL;
+    const char* msg = "";
+    switch (response) {
+        case 10:
+            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_CLOCKWISE);
+            msg = "Rotated 90\xC2\xB0 right";
+            break;
+        case 11:
+            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_COUNTERCLOCKWISE);
+            msg = "Rotated 90\xC2\xB0 left";
+            break;
+        case 12:
+            result = gdk_pixbuf_rotate_simple(pb, GDK_PIXBUF_ROTATE_UPSIDEDOWN);
+            msg = "Rotated 180\xC2\xB0";
+            break;
+        case 13:
+            result = gdk_pixbuf_flip(pb, TRUE);
+            msg = "Flipped horizontal";
+            break;
+        case 14:
+            result = gdk_pixbuf_flip(pb, FALSE);
+            msg = "Flipped vertical";
+            break;
+        default:
+            break;
+    }
+
+    g_object_unref(pb);
+    if (result) {
+        replace_image_from_pixbuf(win, win_data, result, msg);
+        g_object_unref(result);
+    }
+}
+
+static void show_brightness_dialog(MainWindow* win, MainWindowData* win_data) {
+    if (!win_data->current_image) {
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "No image");
+        return;
+    }
+
+    int cur_w = cairo_image_surface_get_width(win_data->current_image);
+    int cur_h = cairo_image_surface_get_height(win_data->current_image);
+
+    GtkWidget* dialog = gtk_dialog_new_with_buttons("Brightness / Color",
+        GTK_WINDOW(win->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_ACCEPT, NULL);
+    GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+
+    // Brightness slider
+    GtkWidget* br_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(br_row), gtk_label_new("Brightness:"), FALSE, FALSE, 0);
+    GtkWidget* br_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 5);
+    gtk_range_set_value(GTK_RANGE(br_scale), 0);
+    gtk_widget_set_size_request(br_scale, 200, -1);
+    gtk_box_pack_start(GTK_BOX(br_row), br_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), br_row, FALSE, FALSE, 4);
+
+    // Contrast slider
+    GtkWidget* ct_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(ct_row), gtk_label_new("Contrast:    "), FALSE, FALSE, 0);
+    GtkWidget* ct_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -100, 100, 5);
+    gtk_range_set_value(GTK_RANGE(ct_scale), 0);
+    gtk_widget_set_size_request(ct_scale, 200, -1);
+    gtk_box_pack_start(GTK_BOX(ct_row), ct_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), ct_row, FALSE, FALSE, 4);
+
+    // Grayscale / Invert buttons
+    GtkWidget* bw_check = gtk_check_button_new_with_label("Grayscale (Black & White)");
+    gtk_box_pack_start(GTK_BOX(content), bw_check, FALSE, FALSE, 4);
+    GtkWidget* inv_check = gtk_check_button_new_with_label("Invert Colors");
+    gtk_box_pack_start(GTK_BOX(content), inv_check, FALSE, FALSE, 2);
+
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        double brightness = gtk_range_get_value(GTK_RANGE(br_scale)) / 100.0;
+        double contrast = gtk_range_get_value(GTK_RANGE(ct_scale)) / 100.0;
+        gboolean grayscale = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bw_check));
+        gboolean invert = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(inv_check));
+
+        if (brightness != 0 || contrast != 0 || grayscale || invert) {
+            // Apply pixel-level adjustments
+            cairo_surface_flush(win_data->current_image);
+            unsigned char* data = cairo_image_surface_get_data(win_data->current_image);
+            int stride = cairo_image_surface_get_stride(win_data->current_image);
+
+            double cf = 1.0 + contrast;  // contrast factor
+            for (int y = 0; y < cur_h; y++) {
+                for (int x = 0; x < cur_w; x++) {
+                    int idx = y * stride + x * 4;
+                    double b = data[idx + 0] / 255.0;
+                    double g = data[idx + 1] / 255.0;
+                    double r = data[idx + 2] / 255.0;
+
+                    // Brightness
+                    r += brightness; g += brightness; b += brightness;
+
+                    // Contrast (around midpoint 0.5)
+                    r = (r - 0.5) * cf + 0.5;
+                    g = (g - 0.5) * cf + 0.5;
+                    b = (b - 0.5) * cf + 0.5;
+
+                    // Grayscale
+                    if (grayscale) {
+                        double lum = r * 0.299 + g * 0.587 + b * 0.114;
+                        r = g = b = lum;
+                    }
+
+                    // Invert
+                    if (invert) { r = 1.0 - r; g = 1.0 - g; b = 1.0 - b; }
+
+                    // Clamp
+                    r = r < 0 ? 0 : (r > 1 ? 1 : r);
+                    g = g < 0 ? 0 : (g > 1 ? 1 : g);
+                    b = b < 0 ? 0 : (b > 1 ? 1 : b);
+
+                    data[idx + 0] = (unsigned char)(b * 255);
+                    data[idx + 1] = (unsigned char)(g * 255);
+                    data[idx + 2] = (unsigned char)(r * 255);
+                }
+            }
+            cairo_surface_mark_dirty(win_data->current_image);
+            gtk_widget_queue_draw(win->canvas);
+            gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Brightness/color adjusted");
+        }
+    }
     gtk_widget_destroy(dialog);
 }
 
@@ -3799,7 +4010,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
         "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy",
-        "Border", "Blur", "Crop", "Resize", "Save"
+        "Border", "Blur", "Crop", "Resize", "Rotate", "Bright", "Save"
     };
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
@@ -3816,10 +4027,12 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         {'t', TOOL_BLUR},       // 10: Blur
         {'t', TOOL_CROP},       // 11: Crop
         {'t', TOOL_RESIZE},     // 12: Resize
-        {'a', 3}                // 13: Save
+        {'t', TOOL_ROTATE},     // 13: Rotate
+        {'t', TOOL_BRIGHTNESS}, // 14: Brightness
+        {'a', 3}                // 15: Save
     };
 
-    for (int i = 0; i < 14; i++) {
+    for (int i = 0; i < 16; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -3856,7 +4069,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
         } else if (i == 8) { // Copy
             g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 13) { // Save
+        } else if (i == 15) { // Save
             g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
