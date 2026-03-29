@@ -2,8 +2,35 @@
 
 LinShot is a modern, open-source screenshot tool built for Linux Debian-based systems. Capture screenshots with real-time area selection, annotate with a full suite of drawing tools, and browse your image files — all from a clean, dark-themed interface.
 
-**Status:** Beta — actively in development with continual updates.
+**Version:** 1.4.0 Beta
 **Created:** January 2025
+
+## Screenshots
+
+### Image Tab — Screenshot Editor
+<img src="screenshots/linshot_01_main.png" alt="Image Tab" width="800">
+
+The main editing workspace. Capture a screenshot or open any image from the Files tab, then annotate with 16 sidebar tools: Line, Arrow, Box, Circle, Text, Border, Blur, Crop, Resize, Rotate, and Brightness. The left sidebar provides quick access to all tools, while the bottom bar shows persistent image dimensions and file size alongside transient status messages. Supports Ctrl+Scroll zoom (10%-1000%), multi-paste overlays, and Flatten to commit all changes. ESC cancels an in-progress capture.
+
+### Files Tab — Image Browser
+<img src="screenshots/linshot_02_files.png" alt="Files Tab" width="800">
+
+Browse all image files (PNG, JPG, BMP, GIF, WebP, TIFF) in the configured screenshot folder. Thumbnails auto-refresh each time you switch to this tab, so newly added files appear immediately. The toolbar shows the total image count. Single-click to select, Ctrl+Click to toggle individual selections, Shift+Click to select a range. Press Delete or click the Delete button to remove selected files from disk (with confirmation). Double-click any image to open it in the editor.
+
+### Tools Tab — Per-Tool Settings
+<img src="screenshots/linshot_03_tools.png" alt="Tools Tab" width="800">
+
+Configure each annotation tool independently. Universal Setting at the top applies color, width, and shadow to all tools at once when enabled. Below, a 3-column grid provides per-tool controls for Line, Arrow, Box, Circle, Border, and Blur — each with a 12-color circular palette, width spinner, shadow toggle, and intensity slider. The Text section at the bottom offers font family (18 fonts), size, bold, italic, shadow, and a live preview showing "Sample Text / 0123456789" that updates as you change settings. All settings persist between sessions.
+
+### Settings Tab — Application Configuration
+<img src="screenshots/linshot_04_settings.png" alt="Settings Tab" width="800">
+
+Configure the screenshot save path, filename format (LinShot/Screenshot prefix with auto-numbering or timestamps), and system integration options. Set LinShot as the default screenshot application, configure the capture hotkey (PrintScreen, Ctrl+PrintScreen, Shift+PrintScreen, Ctrl+Shift+S, or Ctrl+Alt+S), and enable launch at startup. Shortcut key presets are listed for quick selection.
+
+### About Tab — Application Information
+<img src="screenshots/linshot_05_settings.png" alt="About Tab" width="800">
+
+Displays LinShot version, project description, and key details: creation date (January 2025), beta status, open-source license (CC BY-NC 4.0), platform (Linux Debian/Ubuntu/Mint), toolkit (GTK 3 + Cairo + X11), and source repository link.
 
 ## Features
 
@@ -18,6 +45,13 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Blur** — Pixelate/mosaic effect to redact sensitive areas, adjustable intensity
 - **Marquee Selection** — Select and copy regions with dashed marching-ants box
 
+### Image Editing
+- **Crop** — Draw a region with visual preview and dimensions, crop on release
+- **Resize** — Resize by percentage or exact pixel dimensions
+- **Rotate / Flip** — Rotate 90/180 degrees, flip horizontal/vertical
+- **Brightness / Color** — Real-time brightness and contrast adjustment, grayscale, invert colors
+- **Ctrl+Z Undo** — Undo annotations and image operations (crop, resize, rotate, brightness) up to 20 levels
+
 ### Tool Settings
 - **Per-Tool Settings** — Independent color palettes, line widths, and shadow options for each tool
 - **Universal Setting** — Apply color, width, and shadow to all tools at once with a single checkbox
@@ -30,10 +64,6 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Multi-Paste** — Ctrl+V pastes images as movable overlays; paste multiple times for independent overlays
 - **Flatten** — Commit all overlays and annotations permanently into the image
 - **Ctrl+Scroll Zoom** — Zoom in/out on the screenshot editor (10%-1000%)
-- **Crop** — Draw a region with visual preview and dimensions, crop on release
-- **Resize** — Resize by percentage or exact pixel dimensions
-- **Rotate / Flip** — Rotate 90/180 degrees, flip horizontal/vertical
-- **Brightness / Color** — Adjust brightness, contrast, grayscale, invert colors
 - **Multi-Format Support** — Opens and edits PNG, JPG, JPEG, BMP, GIF, WebP, TIFF files
 - **Auto Clipboard** — Every capture is automatically copied to clipboard and saved
 - **Sequential Save** — Save dialog defaults to configured path with _1, _2, _3 suffix
@@ -44,7 +74,6 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Multi-Select** — Click to select, Ctrl+Click to toggle, Shift+Click for range
 - **Delete** — Delete key or Delete button removes selected files from disk (with confirmation)
 - **Double-Click** — Opens any image in the screenshot editor for annotation
-- **Format Support** — Displays PNG, JPG, JPEG, BMP, GIF, WebP, TIFF thumbnails
 
 ### Application
 - **Dark Theme** — Consistent dark UI across sidebar, tabs, and all settings
@@ -53,17 +82,6 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Single Instance** — Lock file prevents duplicate launches, signals existing instance
 - **Persistent Settings** — All tool colors, widths, shadows, and text options saved between sessions
 - **5 Tabs** — Image, Files, Tools, Settings, About
-
-## Screenshots
-
-### Main View
-<img src="screenshots/Screenshot1.png" alt="Main View" width="800">
-
-### Files Browser
-<img src="screenshots/Screenshot2.png" alt="Files Browser" width="800">
-
-### Annotation Tools
-<img src="screenshots/Screenshot3.png" alt="Annotation Tools" width="800">
 
 ## Installation
 
@@ -91,7 +109,7 @@ make
 bash packaging/build-deb.sh
 
 # Install
-sudo dpkg -i linshot_1.0.0_amd64.deb
+sudo dpkg -i linshot_1.4.0_amd64.deb
 
 # Uninstall
 sudo apt remove linshot
@@ -105,7 +123,7 @@ sudo apt remove linshot
 | Ctrl+S | Save with annotations |
 | Ctrl+C | Copy to clipboard (selection or full image) |
 | Ctrl+V | Paste from clipboard as movable overlay (multi-paste supported) |
-| Ctrl+Z | Undo last annotation |
+| Ctrl+Z | Undo annotation or image operation (up to 20 levels) |
 | Ctrl+A | Select all and copy |
 | Ctrl+Scroll | Zoom in/out on screenshot editor |
 | Shift+Drag | Snap Line/Arrow to 45° angles |
