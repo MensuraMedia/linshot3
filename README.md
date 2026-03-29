@@ -12,6 +12,11 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 
 The main editing workspace. Capture a screenshot or open any image from the Files tab, then annotate with 16 sidebar tools: Line, Arrow, Box, Circle, Text, Border, Blur, Crop, Resize, Rotate, and Brightness. The left sidebar provides quick access to all tools, while the bottom bar shows persistent image dimensions and file size alongside transient status messages. Supports Ctrl+Scroll zoom (10%-1000%), multi-paste overlays, and Flatten to commit all changes. ESC cancels an in-progress capture.
 
+### Annotations — Drawing Tools in Action
+<img src="screenshots/linshot_00_annotations.png" alt="Annotations" width="800">
+
+Annotation tools applied to a screenshot: arrows, boxes, circles, lines, borders, and text with customizable colors, widths, and shadows. Each tool has independent settings configured in the Tools tab. Text supports 18 font families with bold, italic, and size controls. All annotations are moveable until flattened, and every operation can be undone with Ctrl+Z (up to 20 levels including image operations like crop, resize, and rotate).
+
 ### Files Tab — Image Browser
 <img src="screenshots/linshot_02_files.png" alt="Files Tab" width="800">
 
