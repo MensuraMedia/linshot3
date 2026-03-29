@@ -62,13 +62,8 @@ static void remove_lock_file(void) {
 
 static void signal_capture_to_instance(pid_t pid) {
     // Send SIGUSR1 to the running instance
+    // (signal file backup removed — it caused double-capture)
     kill(pid, SIGUSR1);
-    // Also create signal file as backup
-    FILE* f = fopen(SIGNAL_FILE, "w");
-    if (f) {
-        fprintf(f, "capture\n");
-        fclose(f);
-    }
 }
 
 int main(int argc, char* argv[]) {
