@@ -4,7 +4,7 @@
 #include <sys/stat.h>
 #include <string.h>
 
-#define THUMBNAIL_SIZE 200
+#define THUMBNAIL_SIZE 160
 
 static int compare_entries_by_time(gconstpointer a, gconstpointer b) {
     const ScreenshotEntry* entry_a = a;
@@ -15,41 +15,27 @@ static int compare_entries_by_time(gconstpointer a, gconstpointer b) {
 static GdkPixbuf* create_thumbnail(const char* filepath) {
     GdkPixbuf* original = gdk_pixbuf_new_from_file(filepath, NULL);
     if (!original) return NULL;
-    
+
     int width = gdk_pixbuf_get_width(original);
     int height = gdk_pixbuf_get_height(original);
-    
+
     // Calculate thumbnail dimensions maintaining aspect ratio
     double scale_w = (double)THUMBNAIL_SIZE / width;
     double scale_h = (double)THUMBNAIL_SIZE / height;
-    double scale = MIN(scale_w, scale_h);  // Use the smaller scale to fit within bounds
-    
-    int thumb_width = width * scale;
-    int thumb_height = height * scale;
-    
-    // Create a new pixbuf with transparent background
-    GdkPixbuf* background = gdk_pixbuf_new(GDK_COLORSPACE_RGB, TRUE, 8, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
-    gdk_pixbuf_fill(background, 0x00000000);  // Transparent background (alpha = 0)
-    
-    // Scale the original image
-    GdkPixbuf* scaled = gdk_pixbuf_scale_simple(original, 
-                                               thumb_width, 
-                                               thumb_height, 
+    double scale = MIN(scale_w, scale_h);
+
+    int thumb_width = (int)(width * scale);
+    int thumb_height = (int)(height * scale);
+    if (thumb_width < 1) thumb_width = 1;
+    if (thumb_height < 1) thumb_height = 1;
+
+    // Scale directly — no padding, tight fit
+    GdkPixbuf* scaled = gdk_pixbuf_scale_simple(original,
+                                               thumb_width,
+                                               thumb_height,
                                                GDK_INTERP_BILINEAR);
-    
-    // Center the scaled image on the background
-    int x_offset = (THUMBNAIL_SIZE - thumb_width) / 2;
-    int y_offset = (THUMBNAIL_SIZE - thumb_height) / 2;
-    
-    // Copy the scaled image onto the background, preserving alpha
-    gdk_pixbuf_copy_area(scaled, 0, 0, thumb_width, thumb_height,
-                        background, x_offset, y_offset);
-    
-    // Clean up
     g_object_unref(original);
-    g_object_unref(scaled);
-    
-    return background;
+    return scaled;
 }
 
 static void screenshot_entry_free(ScreenshotEntry* entry) {

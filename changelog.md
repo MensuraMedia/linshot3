@@ -48,3 +48,4 @@
 | 2026-03-30T03:30:00-04:00 | fix: history — remove event_box so flow box receives clicks natively; load ALL image files not just LinShot/Screenshot prefix |
 | 2026-03-30T04:00:00-04:00 | fix: Delete key now works for history images; history loads from Settings path not default ~/Pictures |
 | 2026-03-30T04:15:00-04:00 | fix: history ghost thumbnails after deletion — reload history data from disk; fix oversized selection highlight |
+| 2026-03-30T04:30:00-04:00 | fix: tight thumbnail borders, auto-refresh on tab switch, detect all image files in folder |

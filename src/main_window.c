@@ -1823,6 +1823,45 @@ static void on_history_selection_changed(GtkFlowBox* flow_box, gpointer data) {
     update_delete_btn_sensitivity(win);
 }
 
+// Refresh history when the History tab is selected (picks up new files)
+static void on_notebook_switch_page(GtkNotebook* notebook, GtkWidget* page,
+                                     guint page_num, gpointer data) {
+    (void)notebook; (void)page;
+    if (page_num != 1) return;  // Only refresh on History tab (index 1)
+
+    MainWindow* win = (MainWindow*)data;
+    if (!win->history_flow_box) return;
+
+    // Reload from disk
+    screenshot_history_load(&win->screenshot_history);
+
+    // Rebuild flow box
+    GList* children = gtk_container_get_children(GTK_CONTAINER(win->history_flow_box));
+    for (GList* iter = children; iter; iter = iter->next) {
+        gtk_widget_destroy(GTK_WIDGET(iter->data));
+    }
+    g_list_free(children);
+
+    GList* entries = screenshot_history_get_sorted(&win->screenshot_history);
+    for (GList* iter = entries; iter; iter = iter->next) {
+        ScreenshotEntry* entry = (ScreenshotEntry*)iter->data;
+        GtkWidget* item_widget = create_history_item_widget(entry, win);
+        gtk_flow_box_insert(GTK_FLOW_BOX(win->history_flow_box), item_widget, -1);
+    }
+    gtk_widget_show_all(win->history_flow_box);
+
+    // Update count
+    GtkWidget* cnt_lbl = safe_get_data(win->window, "history-count-label", "on_notebook_switch_page");
+    if (cnt_lbl && GTK_IS_LABEL(cnt_lbl)) {
+        int cnt = g_list_length(entries);
+        char cnt_msg[32];
+        snprintf(cnt_msg, sizeof(cnt_msg), "%d image%s", cnt, cnt != 1 ? "s" : "");
+        gtk_label_set_text(GTK_LABEL(cnt_lbl), cnt_msg);
+    }
+
+    update_delete_btn_sensitivity(win);
+}
+
 // Double-click (child-activated) opens image in editor
 static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* child, gpointer data) {
     (void)flow_box;
@@ -1871,7 +1910,6 @@ static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow*
     (void)win;
     // Create thumbnail — no event_box so flow box receives clicks directly
     GtkWidget* image = gtk_image_new_from_pixbuf(entry->thumbnail);
-    gtk_widget_set_size_request(image, 200, 200);
     gtk_widget_set_halign(image, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(image, GTK_ALIGN_CENTER);
 
@@ -3776,6 +3814,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
 
     // Double-click to open, single-click to select
     gtk_flow_box_set_activate_on_single_click(GTK_FLOW_BOX(flow_box), FALSE);
+
+    // Refresh history when tab is selected (picks up new files added externally)
+    g_signal_connect(notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), win);
 
     // Connect flow box signals — GTK handles Ctrl+Click and Shift+Click natively
     g_signal_connect(flow_box, "selected-children-changed", G_CALLBACK(on_history_selection_changed), win);
