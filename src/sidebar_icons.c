@@ -194,11 +194,11 @@ typedef void (*IconDrawFunc)(cairo_t*, double, double);
 
 static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_shot,
+    draw_line,
     draw_arrow,
     draw_box,
     draw_circle,
     draw_text,
-    draw_line,
     draw_select,
     draw_flatten,
     draw_copy,

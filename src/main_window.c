@@ -138,15 +138,15 @@ static void load_settings(Settings* settings) {
 
     // Default text font settings
     settings->text_font_family = g_strdup("Arial");
-    settings->text_font_size = 14.0;
-    settings->text_font_bold = false;
+    settings->text_font_size = 15.0;
+    settings->text_font_bold = true;
     settings->text_font_italic = false;
 
     // Default tool line widths
-    settings->tool_widths[0] = 3.0;  // arrow shaft
-    settings->tool_widths[1] = 2.0;  // box
-    settings->tool_widths[2] = 2.0;  // circle
-    settings->tool_widths[3] = 2.0;  // line
+    settings->tool_widths[0] = 3.5;  // arrow
+    settings->tool_widths[1] = 2.5;  // box
+    settings->tool_widths[2] = 2.5;  // circle
+    settings->tool_widths[3] = 3.0;  // line
 
     // Default tool colors (all red)
     for (int i = 0; i < 5; i++) {
@@ -946,6 +946,22 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     } else if (win_data->drawing) {
         win_data->start_point.x2 = event->x;
         win_data->start_point.y2 = event->y;
+
+        // Shift held: snap Line/Arrow to 0/45/90/135/180/225/270/315 degrees
+        if ((event->state & GDK_SHIFT_MASK) &&
+            (win_data->current_tool.type == TOOL_LINE ||
+             win_data->current_tool.type == TOOL_ARROW)) {
+            double dx = event->x - win_data->start_point.x1;
+            double dy = event->y - win_data->start_point.y1;
+            double dist = sqrt(dx * dx + dy * dy);
+            if (dist > 1.0) {
+                double angle = atan2(dy, dx);
+                // Snap to nearest 45-degree increment
+                double snapped = round(angle / (G_PI / 4.0)) * (G_PI / 4.0);
+                win_data->start_point.x2 = win_data->start_point.x1 + (int)(dist * cos(snapped));
+                win_data->start_point.y2 = win_data->start_point.y1 + (int)(dist * sin(snapped));
+            }
+        }
 
         // Ctrl held: constrain to equal ratio (square/circle)
         if ((event->state & GDK_CONTROL_MASK) &&
@@ -1952,7 +1968,8 @@ static void on_text_font_changed(GtkWidget* widget, gpointer data) {
 
     if (g_strcmp0(key, "family") == 0) {
         g_free(settings->text_font_family);
-        settings->text_font_family = g_strdup(gtk_entry_get_text(GTK_ENTRY(widget)));
+        char* active = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(widget));
+        settings->text_font_family = active ? active : g_strdup("Arial");
         if (win_data) {
             g_free(win_data->current_tool.font.family);
             win_data->current_tool.font.family = g_strdup(settings->text_font_family);
@@ -1990,7 +2007,7 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
     // Tools with width + color: Arrow, Box, Circle, Line
     const char* width_tool_names[] = {"Arrow", "Box", "Circle", "Line"};
     const int width_color_map[] = {0, 1, 2, 4};  // indices into tool_colors
-    const char* width_labels[] = {"Shaft width:", "Line width:", "Line width:", "Line width:"};
+    const char* width_labels[] = {"Width:", "Width:", "Width:", "Width:"};
     double width_max[] = {10.0, 10.0, 10.0, 10.0};
 
     for (int i = 0; i < 4; i++) {
@@ -2039,13 +2056,25 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
     GtkWidget* family_label = gtk_label_new("Font:");
     gtk_widget_set_size_request(family_label, 50, -1);
     gtk_widget_set_halign(family_label, GTK_ALIGN_START);
-    GtkWidget* family_entry = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(family_entry), settings ? settings->text_font_family : "Arial");
-    gtk_widget_set_can_default(family_entry, FALSE);
-    g_object_set_data(G_OBJECT(family_entry), "font-key", (gpointer)"family");
-    g_signal_connect(family_entry, "changed", G_CALLBACK(on_text_font_changed), win);
+    GtkWidget* family_combo = gtk_combo_box_text_new();
+    const char* font_list[] = {
+        "Arial", "Helvetica", "Sans", "Verdana", "Tahoma",
+        "Times New Roman", "Serif", "Georgia",
+        "Courier New", "Monospace", "Consolas",
+        "Impact", "Comic Sans MS", "Trebuchet MS",
+        "Ubuntu", "Noto Sans", "DejaVu Sans", "Liberation Sans"
+    };
+    int active_idx = 0;
+    const char* current_font = settings ? settings->text_font_family : "Arial";
+    for (int fi = 0; fi < 18; fi++) {
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(family_combo), font_list[fi]);
+        if (g_ascii_strcasecmp(font_list[fi], current_font) == 0) active_idx = fi;
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(family_combo), active_idx);
+    g_object_set_data(G_OBJECT(family_combo), "font-key", (gpointer)"family");
+    g_signal_connect(family_combo, "changed", G_CALLBACK(on_text_font_changed), win);
     gtk_box_pack_start(GTK_BOX(family_row), family_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(family_row), family_entry, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(family_row), family_combo, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(text_box), family_row, FALSE, FALSE, 0);
 
     // Font size
@@ -2776,16 +2805,16 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create buttons with icons and labels
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "LinShot", "Arrow", "Box", "Circle", "Text", "Line", "Select", "Flatten", "Copy", "Save"
+        "LinShot", "Line", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
     };
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
         {'a', 0},               // 0: LinShot (capture)
-        {'t', TOOL_ARROW},      // 1: Arrow
-        {'t', TOOL_RECTANGLE},  // 2: Box
-        {'t', TOOL_ELLIPSE},    // 3: Circle
-        {'t', TOOL_TEXT},       // 4: Text
-        {'t', TOOL_LINE},       // 5: Line
+        {'t', TOOL_LINE},       // 1: Line
+        {'t', TOOL_ARROW},      // 2: Arrow
+        {'t', TOOL_RECTANGLE},  // 3: Box
+        {'t', TOOL_ELLIPSE},    // 4: Circle
+        {'t', TOOL_TEXT},       // 5: Text
         {'t', TOOL_MARQUEE},    // 6: Select
         {'a', 1},               // 7: Flatten
         {'a', 2},               // 8: Copy
