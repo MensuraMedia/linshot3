@@ -107,8 +107,13 @@ static bool run_cmd(const char* cmd) {
 // ---------------------------------------------------------------------------
 
 static bool cinnamon_unregister(void) {
-    // Remove the custom keybinding
+    // Remove LinShot custom keybinding
     run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/binding \"['']\"");
+    // Restore Cinnamon's built-in screenshot keys
+    run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
+    run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
+    run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot-clip 2>/dev/null");
+    run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys window-screenshot 2>/dev/null");
     return true;
 }
 
@@ -134,15 +139,14 @@ static bool cinnamon_register(KeyBinding key, const char* exec_path) {
     // Set the name
     run_cmd("dconf write /org/cinnamon/desktop/keybindings/custom-keybindings/linshot/name \"'LinShot Screenshot'\"");
 
-    // Disable Cinnamon's built-in screenshot handler for this key to avoid conflict
-    if (key == KB_PRINTSCREEN) {
-        run_cmd("dconf write /org/cinnamon/desktop/keybindings/media-keys/screenshot \"''\"");
-        run_cmd("dconf write /org/cinnamon/desktop/keybindings/media-keys/area-screenshot \"''\"");
-    } else if (key == KB_SHIFT_PRINTSCREEN) {
-        run_cmd("dconf write /org/cinnamon/desktop/keybindings/media-keys/area-screenshot \"''\"");
-    } else if (key == KB_CTRL_PRINTSCREEN) {
-        run_cmd("dconf write /org/cinnamon/desktop/keybindings/media-keys/window-screenshot \"''\"");
-    }
+    // Disable ALL Cinnamon built-in screenshot handlers to avoid conflict
+    // Must use gsettings (not dconf write) — Cinnamon reads from gsettings
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot '[]'");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot '[]'");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys screenshot-clip '[]' 2>/dev/null");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot '[]' 2>/dev/null");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip '[]' 2>/dev/null");
+    run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]' 2>/dev/null");
 
     return true;
 }
