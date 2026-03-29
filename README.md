@@ -48,7 +48,7 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 - **Configurable Hotkey** — Set as default screenshot app with PrintScreen remapping
 - **Single Instance** — Lock file prevents duplicate launches, signals existing instance
 - **Persistent Settings** — All tool colors, widths, shadows, and text options saved between sessions
-- **5 Tabs** — Screenshot, Files, Tools, Settings, About
+- **5 Tabs** — Image, Files, Tools, Settings, About
 
 ## Screenshots
 

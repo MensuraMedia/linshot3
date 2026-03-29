@@ -3727,7 +3727,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
 
     // Create current screenshot page
     GtkWidget* screenshot_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    GtkWidget* screenshot_label = gtk_label_new("Screenshot");
+    GtkWidget* screenshot_label = gtk_label_new("Image");
     gtk_widget_set_halign(screenshot_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), screenshot_page, screenshot_label);
 

@@ -50,3 +50,4 @@
 | 2026-03-30T04:15:00-04:00 | fix: history ghost thumbnails after deletion — reload history data from disk; fix oversized selection highlight |
 | 2026-03-30T04:30:00-04:00 | fix: tight thumbnail borders, auto-refresh on tab switch, detect all image files in folder |
 | 2026-03-30T05:00:00-04:00 | feat: rename History tab to Files; support all image formats in editor (PNG, JPG, BMP, GIF, WebP, TIFF) |
+| 2026-03-30T05:10:00-04:00 | feat: rename Screenshot tab to Image; update all documentation |
