@@ -117,12 +117,21 @@ void screenshot_history_load(ScreenshotHistory* history) {
     
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
-        // Skip . and ..
+        // Skip hidden files
         if (entry->d_name[0] == '.') continue;
-        
-        // Check if filename starts with "LinShot" or "Screenshot"
-        if (strncmp(entry->d_name, "LinShot", 7) == 0 || 
-            strncmp(entry->d_name, "Screenshot", 9) == 0) {
+
+        // Check if file has an image extension
+        const char* dot = strrchr(entry->d_name, '.');
+        if (!dot) continue;
+        dot++;
+        if (g_ascii_strcasecmp(dot, "png") == 0 ||
+            g_ascii_strcasecmp(dot, "jpg") == 0 ||
+            g_ascii_strcasecmp(dot, "jpeg") == 0 ||
+            g_ascii_strcasecmp(dot, "bmp") == 0 ||
+            g_ascii_strcasecmp(dot, "gif") == 0 ||
+            g_ascii_strcasecmp(dot, "webp") == 0 ||
+            g_ascii_strcasecmp(dot, "tiff") == 0 ||
+            g_ascii_strcasecmp(dot, "tif") == 0) {
             char* filepath = g_build_filename(screenshot_dir, entry->d_name, NULL);
             screenshot_history_add(history, filepath);
             g_free(filepath);

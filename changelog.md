@@ -45,3 +45,4 @@
 | 2026-03-30T02:00:00-04:00 | feat: Ctrl+Scroll zoom in/out on screenshot editor (10%-1000%, status bar shows percentage) |
 | 2026-03-30T02:30:00-04:00 | refactor: history delete — replace checkbox mode with Ctrl+Click select/deselect, simpler and more reliable |
 | 2026-03-30T03:00:00-04:00 | refactor: history selection — native GTK flow box Ctrl+Click/Shift+Click, Delete key, image count, double-click to open |
+| 2026-03-30T03:30:00-04:00 | fix: history — remove event_box so flow box receives clicks natively; load ALL image files not just LinShot/Screenshot prefix |

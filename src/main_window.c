@@ -1833,9 +1833,10 @@ static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* ch
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_history_child_activated");
 
-    GtkWidget* event_box = gtk_bin_get_child(GTK_BIN(child));
-    if (!event_box) return;
-    const char* filepath = safe_get_data(event_box, "filepath", "on_history_child_activated");
+    // Get filepath from the child's image widget
+    GtkWidget* inner = gtk_bin_get_child(GTK_BIN(child));
+    if (!inner) return;
+    const char* filepath = safe_get_data(inner, "filepath", "on_history_child_activated");
     if (!filepath) return;
 
     // Load the image
@@ -1872,16 +1873,14 @@ static void on_history_child_activated(GtkFlowBox* flow_box, GtkFlowBoxChild* ch
 
 static GtkWidget* create_history_item_widget(ScreenshotEntry* entry, MainWindow* win) {
     (void)win;
-    // Create thumbnail
+    // Create thumbnail — no event_box so flow box receives clicks directly
     GtkWidget* image = gtk_image_new_from_pixbuf(entry->thumbnail);
     gtk_widget_set_size_request(image, 200, 200);
 
-    // Wrap in event_box to store filepath (no click handler — flow box handles selection)
-    GtkWidget* event_box = gtk_event_box_new();
-    gtk_container_add(GTK_CONTAINER(event_box), image);
-    safe_set_data_full(event_box, "filepath", g_strdup(entry->filepath), g_free, "create_history_item_widget");
+    // Store filepath directly on the image widget
+    safe_set_data_full(image, "filepath", g_strdup(entry->filepath), g_free, "create_history_item_widget");
 
-    return event_box;
+    return image;
 }
 
 // --- History deletion support ---
@@ -1919,10 +1918,10 @@ static void on_delete_selected_clicked(GtkWidget* widget, gpointer data) {
     int deleted = 0;
     for (GList* iter = selected; iter; iter = iter->next) {
         GtkFlowBoxChild* child = GTK_FLOW_BOX_CHILD(iter->data);
-        GtkWidget* event_box = gtk_bin_get_child(GTK_BIN(child));
-        if (!event_box) continue;
+        GtkWidget* inner = gtk_bin_get_child(GTK_BIN(child));
+        if (!inner) continue;
 
-        const char* filepath = safe_get_data(event_box, "filepath", "on_delete_selected_clicked");
+        const char* filepath = safe_get_data(inner, "filepath", "on_delete_selected_clicked");
         if (filepath && g_file_test(filepath, G_FILE_TEST_EXISTS)) {
             if (g_unlink(filepath) == 0) {
                 deleted++;
@@ -3703,11 +3702,11 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_set_margin_top(history_toolbar, 6);
     gtk_widget_set_margin_bottom(history_toolbar, 4);
 
-    // Image count label (updated when history loads)
+    // Image count label (updated when history loads) — left aligned
     GtkWidget* count_label = gtk_label_new("0 images");
-    gtk_widget_set_halign(count_label, GTK_ALIGN_CENTER);
+    gtk_widget_set_halign(count_label, GTK_ALIGN_START);
     safe_set_data(win->window, "history-count-label", count_label, "main_window_init");
-    gtk_box_pack_start(GTK_BOX(history_toolbar), count_label, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(history_toolbar), count_label, FALSE, FALSE, 0);
 
     GtkWidget* hint_label = gtk_label_new("Ctrl+Click select  |  Shift+Click range  |  Delete key");
     gtk_widget_set_opacity(hint_label, 0.4);
