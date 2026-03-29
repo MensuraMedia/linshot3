@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <glib/gstdio.h>
+#include <math.h>
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
@@ -43,6 +44,11 @@ typedef struct {
     bool start_with_os;  // New: Start with OS option
     ShortcutKey shortcut_key;  // New: Shortcut key option
     bool default_screenshot_app;  // Register as default screenshot tool
+    GdkRGBA tool_colors[4];      // Per-tool colors: [0]=arrow, [1]=box, [2]=circle, [3]=text
+    char* text_font_family;      // Text tool font family
+    double text_font_size;       // Text tool font size
+    bool text_font_bold;         // Text tool bold
+    bool text_font_italic;       // Text tool italic
 } Settings;
 
 // Forward declarations
@@ -129,6 +135,20 @@ static void load_settings(Settings* settings) {
     settings->shortcut_key = SHORTCUT_PRINTSCREEN;
     settings->default_screenshot_app = false;
 
+    // Default text font settings
+    settings->text_font_family = g_strdup("Arial");
+    settings->text_font_size = 14.0;
+    settings->text_font_bold = false;
+    settings->text_font_italic = false;
+
+    // Default tool colors (all red)
+    for (int i = 0; i < 4; i++) {
+        settings->tool_colors[i].red = 1.0;
+        settings->tool_colors[i].green = 0.0;
+        settings->tool_colors[i].blue = 0.0;
+        settings->tool_colors[i].alpha = 1.0;
+    }
+
     // Try to load from config file
     char* config_file = get_config_file_path();
     GKeyFile* key_file = g_key_file_new();
@@ -160,6 +180,29 @@ static void load_settings(Settings* settings) {
             settings->default_screenshot_app = false;
             g_error_free(err);
         }
+
+        // Load per-tool colors
+        const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text"};
+        for (int i = 0; i < 4; i++) {
+            char* color_str = g_key_file_get_string(key_file, "Settings", color_keys[i], NULL);
+            if (color_str) {
+                gdk_rgba_parse(&settings->tool_colors[i], color_str);
+                g_free(color_str);
+            }
+        }
+
+        // Load text font settings
+        char* font = g_key_file_get_string(key_file, "Settings", "text_font_family", NULL);
+        if (font) { g_free(settings->text_font_family); settings->text_font_family = font; }
+        GError* serr = NULL;
+        double fsize = g_key_file_get_double(key_file, "Settings", "text_font_size", &serr);
+        if (!serr && fsize > 0) settings->text_font_size = fsize; else if (serr) g_error_free(serr);
+        serr = NULL;
+        settings->text_font_bold = g_key_file_get_boolean(key_file, "Settings", "text_font_bold", &serr);
+        if (serr) { settings->text_font_bold = false; g_error_free(serr); }
+        serr = NULL;
+        settings->text_font_italic = g_key_file_get_boolean(key_file, "Settings", "text_font_italic", &serr);
+        if (serr) { settings->text_font_italic = false; g_error_free(serr); }
     }
     
     g_key_file_free(key_file);
@@ -177,6 +220,20 @@ static void save_settings(Settings* settings) {
     g_key_file_set_boolean(key_file, "Settings", "start_with_os", settings->start_with_os);
     g_key_file_set_integer(key_file, "Settings", "shortcut_key", settings->shortcut_key);
     g_key_file_set_boolean(key_file, "Settings", "default_screenshot_app", settings->default_screenshot_app);
+
+    // Save per-tool colors
+    const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text"};
+    for (int i = 0; i < 4; i++) {
+        char* color_str = gdk_rgba_to_string(&settings->tool_colors[i]);
+        g_key_file_set_string(key_file, "Settings", color_keys[i], color_str);
+        g_free(color_str);
+    }
+
+    // Save text font settings
+    g_key_file_set_string(key_file, "Settings", "text_font_family", settings->text_font_family);
+    g_key_file_set_double(key_file, "Settings", "text_font_size", settings->text_font_size);
+    g_key_file_set_boolean(key_file, "Settings", "text_font_bold", settings->text_font_bold);
+    g_key_file_set_boolean(key_file, "Settings", "text_font_italic", settings->text_font_italic);
 
     // Save to file
     GError* error = NULL;
@@ -585,9 +642,30 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
     int tool_id = GPOINTER_TO_INT(safe_get_data(widget, "tool-id", "on_tool_button_clicked"));
     
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_tool_button_clicked");
+    Settings* settings = safe_get_data(win->window, "settings", "on_tool_button_clicked");
     if (win_data) {
         win_data->current_tool.type = tool_id;
-        
+
+        // Apply saved color for drawing tools
+        if (settings) {
+            int color_map = -1;
+            if (tool_id == TOOL_ARROW) color_map = 0;
+            else if (tool_id == TOOL_RECTANGLE) color_map = 1;
+            else if (tool_id == TOOL_ELLIPSE) color_map = 2;
+            else if (tool_id == TOOL_TEXT) color_map = 3;
+            if (color_map >= 0) {
+                win_data->current_tool.color = settings->tool_colors[color_map];
+            }
+            // Apply saved font settings for text tool
+            if (tool_id == TOOL_TEXT) {
+                g_free(win_data->current_tool.font.family);
+                win_data->current_tool.font.family = g_strdup(settings->text_font_family);
+                win_data->current_tool.font.size = settings->text_font_size;
+                win_data->current_tool.font.is_bold = settings->text_font_bold;
+                win_data->current_tool.font.is_italic = settings->text_font_italic;
+            }
+        }
+
         const char* tool_names[] = {
             "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select"
         };
@@ -1703,6 +1781,229 @@ static void create_about_page(GtkWidget* notebook, GtkCssProvider* css_provider)
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, about_tab_label);
 }
 
+// --- Colors tab ---
+
+static const GdkRGBA palette_colors[12] = {
+    {1.0, 0.0, 0.0, 1.0},    {1.0, 0.5, 0.0, 1.0},    {1.0, 1.0, 0.0, 1.0},
+    {0.0, 0.8, 0.0, 1.0},    {0.0, 0.5, 1.0, 1.0},    {0.6, 0.0, 1.0, 1.0},
+    {1.0, 1.0, 1.0, 1.0},    {0.75, 0.75, 0.75, 1.0},  {0.5, 0.5, 0.5, 1.0},
+    {0.0, 0.0, 0.0, 1.0},    {0.6, 0.2, 0.0, 1.0},    {1.0, 0.4, 0.7, 1.0},
+};
+
+static gboolean on_palette_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
+    (void)data;
+    int ci = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "palette-idx"));
+    const GdkRGBA* c = &palette_colors[ci];
+    cairo_set_source_rgba(cr, c->red, c->green, c->blue, c->alpha);
+    cairo_rectangle(cr, 0, 0, 28, 28);
+    cairo_fill(cr);
+    // Border
+    cairo_set_source_rgba(cr, 0.4, 0.4, 0.4, 1.0);
+    cairo_set_line_width(cr, 1.0);
+    cairo_rectangle(cr, 0.5, 0.5, 27, 27);
+    cairo_stroke(cr);
+    // Check mark if this color is selected
+    gboolean selected = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "is-selected"));
+    if (selected) {
+        // Draw a white/black check
+        double luma = c->red * 0.299 + c->green * 0.587 + c->blue * 0.114;
+        if (luma > 0.5) cairo_set_source_rgb(cr, 0, 0, 0);
+        else cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_set_line_width(cr, 2.0);
+        cairo_move_to(cr, 7, 14); cairo_line_to(cr, 12, 20); cairo_line_to(cr, 22, 8);
+        cairo_stroke(cr);
+    }
+    return FALSE;
+}
+
+typedef struct {
+    MainWindow* win;
+    int tool_color_idx;  // 0=arrow,1=box,2=circle,3=text
+    int palette_idx;     // index into palette_colors
+    GtkWidget* grid;     // the grid to refresh check marks
+} PaletteClickData;
+
+static void update_palette_checks(GtkWidget* grid, int tool_color_idx, MainWindow* win) {
+    Settings* settings = safe_get_data(win->window, "settings", "update_palette_checks");
+    if (!settings) return;
+    GdkRGBA* cur = &settings->tool_colors[tool_color_idx];
+    GList* children = gtk_container_get_children(GTK_CONTAINER(grid));
+    for (GList* l = children; l; l = l->next) {
+        GtkWidget* child = GTK_WIDGET(l->data);
+        int ci = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child), "palette-idx"));
+        const GdkRGBA* pc = &palette_colors[ci];
+        gboolean match = (fabs(pc->red - cur->red) < 0.01 &&
+                          fabs(pc->green - cur->green) < 0.01 &&
+                          fabs(pc->blue - cur->blue) < 0.01);
+        g_object_set_data(G_OBJECT(child), "is-selected", GINT_TO_POINTER(match));
+        gtk_widget_queue_draw(child);
+    }
+    g_list_free(children);
+}
+
+static void on_palette_color_clicked(GtkWidget* widget, GdkEventButton* event, gpointer data) {
+    (void)widget; (void)event;
+    PaletteClickData* pcd = (PaletteClickData*)data;
+    Settings* settings = safe_get_data(pcd->win->window, "settings", "on_palette_color_clicked");
+    if (!settings) return;
+    settings->tool_colors[pcd->tool_color_idx] = palette_colors[pcd->palette_idx];
+    save_settings(settings);
+
+    // Update active tool color if matching
+    MainWindowData* win_data = safe_get_data(pcd->win->window, "window-data", "on_palette_color_clicked");
+    if (win_data) {
+        ToolType types[] = {TOOL_ARROW, TOOL_RECTANGLE, TOOL_ELLIPSE, TOOL_TEXT};
+        if (win_data->current_tool.type == types[pcd->tool_color_idx]) {
+            win_data->current_tool.color = palette_colors[pcd->palette_idx];
+        }
+    }
+
+    update_palette_checks(pcd->grid, pcd->tool_color_idx, pcd->win);
+}
+
+static GtkWidget* create_tool_color_section(const char* tool_name, int tool_color_idx,
+                                             MainWindow* win, GList** alloc_list) {
+    GtkWidget* frame = gtk_frame_new(tool_name);
+    GtkWidget* grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 3);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 3);
+    gtk_container_set_border_width(GTK_CONTAINER(grid), 8);
+    gtk_container_add(GTK_CONTAINER(frame), grid);
+
+    for (int i = 0; i < 12; i++) {
+        GtkWidget* swatch = gtk_drawing_area_new();
+        gtk_widget_set_size_request(swatch, 28, 28);
+        gtk_widget_add_events(swatch, GDK_BUTTON_PRESS_MASK);
+        g_object_set_data(G_OBJECT(swatch), "palette-idx", GINT_TO_POINTER(i));
+        g_object_set_data(G_OBJECT(swatch), "is-selected", GINT_TO_POINTER(0));
+        g_signal_connect(swatch, "draw", G_CALLBACK(on_palette_draw), NULL);
+
+        PaletteClickData* pcd = g_new0(PaletteClickData, 1);
+        pcd->win = win;
+        pcd->tool_color_idx = tool_color_idx;
+        pcd->palette_idx = i;
+        pcd->grid = grid;
+        *alloc_list = g_list_append(*alloc_list, pcd);
+
+        g_signal_connect(swatch, "button-press-event", G_CALLBACK(on_palette_color_clicked), pcd);
+        gtk_grid_attach(GTK_GRID(grid), swatch, i % 6, i / 6, 1, 1);
+    }
+
+    // Set initial check marks
+    update_palette_checks(grid, tool_color_idx, win);
+
+    return frame;
+}
+
+static void on_text_font_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_text_font_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_text_font_changed");
+    if (!settings) return;
+
+    const char* key = g_object_get_data(G_OBJECT(widget), "font-key");
+    if (!key) return;
+
+    if (g_strcmp0(key, "family") == 0) {
+        g_free(settings->text_font_family);
+        settings->text_font_family = g_strdup(gtk_entry_get_text(GTK_ENTRY(widget)));
+        if (win_data) {
+            g_free(win_data->current_tool.font.family);
+            win_data->current_tool.font.family = g_strdup(settings->text_font_family);
+        }
+    } else if (g_strcmp0(key, "size") == 0) {
+        settings->text_font_size = gtk_spin_button_get_value(GTK_SPIN_BUTTON(widget));
+        if (win_data) win_data->current_tool.font.size = settings->text_font_size;
+    } else if (g_strcmp0(key, "bold") == 0) {
+        settings->text_font_bold = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+        if (win_data) win_data->current_tool.font.is_bold = settings->text_font_bold;
+    } else if (g_strcmp0(key, "italic") == 0) {
+        settings->text_font_italic = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+        if (win_data) win_data->current_tool.font.is_italic = settings->text_font_italic;
+    }
+
+    save_settings(settings);
+}
+
+static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
+    GtkWidget* scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+
+    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_start(vbox, 10);
+    gtk_widget_set_margin_end(vbox, 10);
+    gtk_widget_set_margin_top(vbox, 10);
+    gtk_widget_set_margin_bottom(vbox, 10);
+    gtk_container_add(GTK_CONTAINER(scroll), vbox);
+
+    GList* alloc_list = NULL;
+
+    // Tool color sections
+    const char* tool_names[] = {"Arrow Color", "Box Color", "Circle Color", "Text Color"};
+    for (int i = 0; i < 4; i++) {
+        GtkWidget* section = create_tool_color_section(tool_names[i], i, win, &alloc_list);
+        gtk_box_pack_start(GTK_BOX(vbox), section, FALSE, FALSE, 0);
+    }
+
+    // Text tool additional settings
+    Settings* settings = safe_get_data(win->window, "settings", "create_colors_page");
+
+    GtkWidget* text_frame = gtk_frame_new("Text Settings");
+    GtkWidget* text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    gtk_container_set_border_width(GTK_CONTAINER(text_box), 8);
+    gtk_container_add(GTK_CONTAINER(text_frame), text_box);
+
+    // Font family
+    GtkWidget* family_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* family_label = gtk_label_new("Font:");
+    gtk_widget_set_size_request(family_label, 50, -1);
+    gtk_widget_set_halign(family_label, GTK_ALIGN_START);
+    GtkWidget* family_entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(family_entry), settings ? settings->text_font_family : "Arial");
+    gtk_widget_set_can_default(family_entry, FALSE);
+    g_object_set_data(G_OBJECT(family_entry), "font-key", (gpointer)"family");
+    g_signal_connect(family_entry, "changed", G_CALLBACK(on_text_font_changed), win);
+    gtk_box_pack_start(GTK_BOX(family_row), family_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(family_row), family_entry, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(text_box), family_row, FALSE, FALSE, 0);
+
+    // Font size
+    GtkWidget* size_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* size_label = gtk_label_new("Size:");
+    gtk_widget_set_size_request(size_label, 50, -1);
+    gtk_widget_set_halign(size_label, GTK_ALIGN_START);
+    GtkWidget* size_spin = gtk_spin_button_new_with_range(6, 72, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(size_spin), settings ? settings->text_font_size : 14.0);
+    g_object_set_data(G_OBJECT(size_spin), "font-key", (gpointer)"size");
+    g_signal_connect(size_spin, "value-changed", G_CALLBACK(on_text_font_changed), win);
+    gtk_box_pack_start(GTK_BOX(size_row), size_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(size_row), size_spin, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text_box), size_row, FALSE, FALSE, 0);
+
+    // Bold / Italic
+    GtkWidget* style_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* bold_check = gtk_check_button_new_with_label("Bold");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bold_check), settings ? settings->text_font_bold : false);
+    g_object_set_data(G_OBJECT(bold_check), "font-key", (gpointer)"bold");
+    g_signal_connect(bold_check, "toggled", G_CALLBACK(on_text_font_changed), win);
+    GtkWidget* italic_check = gtk_check_button_new_with_label("Italic");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(italic_check), settings ? settings->text_font_italic : false);
+    g_object_set_data(G_OBJECT(italic_check), "font-key", (gpointer)"italic");
+    g_signal_connect(italic_check, "toggled", G_CALLBACK(on_text_font_changed), win);
+    gtk_box_pack_start(GTK_BOX(style_row), bold_check, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(style_row), italic_check, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text_box), style_row, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(vbox), text_frame, FALSE, FALSE, 0);
+
+    // alloc_list is freed when the widget tree is destroyed (small leak, acceptable)
+
+    GtkWidget* colors_tab_label = gtk_label_new("Colors");
+    gtk_widget_set_halign(colors_tab_label, GTK_ALIGN_CENTER);
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroll, colors_tab_label);
+}
+
 static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
     GdkDisplay* display = gdk_display_get_default();
     GdkScreen* screen = gdk_display_get_default_screen(display);
@@ -2496,7 +2797,10 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     GtkWidget* screenshot_label = gtk_label_new("Screenshot");
     gtk_widget_set_halign(screenshot_label, GTK_ALIGN_CENTER);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), screenshot_page, screenshot_label);
-    
+
+    // Create colors tab (second position, right after Screenshot)
+    create_colors_page(win, notebook);
+
     // Create scrolled window for the canvas
     GtkWidget* canvas_scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(canvas_scroll),
