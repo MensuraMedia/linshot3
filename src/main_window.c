@@ -73,6 +73,7 @@ static void on_flatten_button_clicked(GtkWidget* widget, gpointer data);
 static void paste_overlay_free(PasteOverlay* overlay);
 static void on_delete_mode_toggled(GtkWidget* widget, gpointer data);
 static void on_delete_selected_clicked(GtkWidget* widget, gpointer data);
+static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data);
 static GdkFilterReturn key_filter_func_global(GdkXEvent* xevent, GdkEvent* event, gpointer data);
 static void on_save_button_clicked(GtkWidget* widget, gpointer data);
 static void on_copy_button_clicked(GtkWidget* widget, gpointer data);
@@ -785,16 +786,21 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
         int width = cairo_image_surface_get_width(win_data->current_image);
         int height = cairo_image_surface_get_height(win_data->current_image);
         
-        // Set canvas size to match image size if needed
-        if (gtk_widget_get_allocated_width(win->canvas) != width ||
-            gtk_widget_get_allocated_height(win->canvas) != height) {
-            gtk_widget_set_size_request(win->canvas, width, height);
+        // Apply zoom to canvas size
+        double zoom = win_data->zoom_level;
+        int zoomed_w = (int)(width * zoom);
+        int zoomed_h = (int)(height * zoom);
+
+        // Set canvas size to match zoomed image size if needed
+        if (gtk_widget_get_allocated_width(win->canvas) != zoomed_w ||
+            gtk_widget_get_allocated_height(win->canvas) != zoomed_h) {
+            gtk_widget_set_size_request(win->canvas, zoomed_w, zoomed_h);
         }
-        
-        // Create a new surface for the image
+
+        // Create a new surface for the image (at original resolution)
         cairo_surface_t* image_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
         cairo_t* image_cr = cairo_create(image_surface);
-        
+
         // Draw the image
         cairo_set_source_surface(image_cr, win_data->current_image, 0, 0);
         cairo_paint(image_cr);
@@ -850,7 +856,8 @@ static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
             annotation_draw(&marq, image_cr);
         }
 
-        // Draw the combined image and annotations to the widget
+        // Draw the combined image and annotations to the widget with zoom
+        cairo_scale(cr, zoom, zoom);
         cairo_set_source_surface(cr, image_surface, 0, 0);
         cairo_paint(cr);
         
@@ -926,7 +933,12 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpoint
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_button_press");
-    
+
+    // Transform coordinates for zoom
+    double zoom = win_data->zoom_level;
+    event->x /= zoom;
+    event->y /= zoom;
+
     if (event->button == 1) {  // Left mouse button
         // Check if clicking on any paste overlay (check topmost/last first)
         for (GList* piter = g_list_last(win_data->paste_overlays); piter; piter = piter->prev) {
@@ -981,7 +993,12 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_motion_notify");
-    
+
+    // Transform coordinates for zoom
+    double zoom = win_data->zoom_level;
+    event->x /= zoom;
+    event->y /= zoom;
+
     if (win_data->dragging_paste && win_data->dragging_overlay) {
         win_data->dragging_overlay->x = event->x - win_data->paste_drag_ox;
         win_data->dragging_overlay->y = event->y - win_data->paste_drag_oy;
@@ -1038,11 +1055,61 @@ static gboolean on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpoin
     return TRUE;
 }
 
+static gboolean on_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer data) {
+    (void)widget;
+    MainWindow* win = (MainWindow*)data;
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_scroll_event");
+    if (!win_data || !win_data->current_image) return FALSE;
+
+    // Only zoom with Ctrl held
+    if (!(event->state & GDK_CONTROL_MASK)) return FALSE;
+
+    double old_zoom = win_data->zoom_level;
+
+    if (event->direction == GDK_SCROLL_UP) {
+        win_data->zoom_level *= 1.15;
+    } else if (event->direction == GDK_SCROLL_DOWN) {
+        win_data->zoom_level /= 1.15;
+    } else if (event->direction == GDK_SCROLL_SMOOTH) {
+        // Smooth scrolling (trackpad)
+        if (event->delta_y < 0) {
+            win_data->zoom_level *= 1.08;
+        } else if (event->delta_y > 0) {
+            win_data->zoom_level /= 1.08;
+        }
+    }
+
+    // Clamp zoom range
+    if (win_data->zoom_level < 0.1) win_data->zoom_level = 0.1;
+    if (win_data->zoom_level > 10.0) win_data->zoom_level = 10.0;
+
+    if (win_data->zoom_level != old_zoom) {
+        // Resize canvas to match zoomed image dimensions
+        int img_w = cairo_image_surface_get_width(win_data->current_image);
+        int img_h = cairo_image_surface_get_height(win_data->current_image);
+        gtk_widget_set_size_request(win->canvas,
+            (int)(img_w * win_data->zoom_level),
+            (int)(img_h * win_data->zoom_level));
+        gtk_widget_queue_draw(win->canvas);
+
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Zoom: %d%%", (int)(win_data->zoom_level * 100));
+        gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, msg);
+    }
+
+    return TRUE;
+}
+
 static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event, gpointer data) {
     (void)widget;
     MainWindow* win = (MainWindow*)data;
     MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_button_release");
-    
+
+    // Transform coordinates for zoom
+    double zoom = win_data->zoom_level;
+    event->x /= zoom;
+    event->y /= zoom;
+
     if (event->button == 1) {
         if (win_data->dragging_paste) {
             win_data->dragging_paste = false;
@@ -1747,13 +1814,14 @@ static void on_history_item_clicked(GtkWidget* widget, GdkEventButton* event, gp
     // Set the new image
     win_data->current_image = surface;
     win_data->annotations = NULL;
-    
+    win_data->zoom_level = 1.0;  // Reset zoom on new image
+
     // Switch to screenshot tab (it's the first tab)
     GtkWidget* notebook = gtk_widget_get_ancestor(win->canvas, GTK_TYPE_NOTEBOOK);
     if (notebook) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 0);
     }
-    
+
     // Redraw canvas
     gtk_widget_queue_draw(win->canvas);
     gtk_statusbar_push(GTK_STATUSBAR(win->statusbar), 0, "Loaded image from history");
@@ -3358,6 +3426,7 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     data->paste_drag_oy = 0;
     data->paste_overlays = NULL;
     data->dragging_overlay = NULL;
+    data->zoom_level = 1.0;
 
     // Set window data using safe wrapper
     safe_set_data_full(win->window, "window-data", data, g_free, "main_window_init");
@@ -3441,8 +3510,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
         "scale trough { background-color: #444444; min-height: 4px; border-radius: 2px; }"
         "scale highlight { background-color: #e0e0e0; min-height: 4px; border-radius: 2px; }"
         "combobox { font-size: 12px; }"
-        "flowboxchild { border: 2px solid transparent; border-radius: 4px; }"
-        "flowboxchild:selected { border: 2px solid #5599ff; background-color: rgba(85,153,255,0.15); }"
+        "flowboxchild { border: 3px solid transparent; border-radius: 4px; padding: 2px; }"
+        "flowboxchild:selected { border: 3px solid #5599ff; background-color: rgba(85,153,255,0.25); }"
+        "flowboxchild:selected image { opacity: 0.7; }"
         "separator { background-color: #555555; }",
         -1, NULL);
     
@@ -3580,7 +3650,9 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     gtk_widget_add_events(win->canvas,
                          GDK_BUTTON_PRESS_MASK |
                          GDK_BUTTON_RELEASE_MASK |
-                         GDK_POINTER_MOTION_MASK);
+                         GDK_POINTER_MOTION_MASK |
+                         GDK_SCROLL_MASK |
+                         GDK_SMOOTH_SCROLL_MASK);
     
     // Apply drawing area style
     GtkStyleContext* canvas_context = gtk_widget_get_style_context(win->canvas);
@@ -3594,7 +3666,8 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     g_signal_connect(win->canvas, "button-press-event", G_CALLBACK(on_button_press), win);
     g_signal_connect(win->canvas, "button-release-event", G_CALLBACK(on_button_release), win);
     g_signal_connect(win->canvas, "motion-notify-event", G_CALLBACK(on_motion_notify), win);
-    
+    g_signal_connect(win->canvas, "scroll-event", G_CALLBACK(on_scroll_event), win);
+
     // Add canvas to scrolled window
     gtk_container_add(GTK_CONTAINER(canvas_scroll), win->canvas);
     

@@ -49,6 +49,7 @@ typedef struct {
     double paste_drag_oy;
     GList* paste_overlays;     // List of PasteOverlay* for multi-paste
     PasteOverlay* dragging_overlay; // Which overlay is being dragged
+    double zoom_level;         // Canvas zoom (1.0 = 100%)
 } MainWindowData;
 
 // Initialize and show the main window
