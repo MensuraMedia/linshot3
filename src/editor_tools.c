@@ -55,17 +55,23 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
     switch (annotation->type) {
         case TOOL_ARROW:
             {
-                // Narrow shaft with rounded tail flowing into solid triangular head
-                // Drawn as one continuous path to avoid seams
+                // Fixed-size arrow: shaft width and head size from line_width setting
                 double dx = annotation->bounds.x2 - annotation->bounds.x1;
                 double dy = annotation->bounds.y2 - annotation->bounds.y1;
                 double angle = atan2(dy, dx);
                 double length = sqrt(dx * dx + dy * dy);
                 if (length < 2.0) break;
 
-                double shaft_half = fmin(fmax(length * 0.02, 1.5), 3.5);
-                double head_length = fmin(fmax(length * 0.25, 14.0), 30.0);
-                double head_half = head_length * 0.55;
+                double lw = annotation->settings.line_width;
+                double shaft_half = lw * 0.5;
+                double head_length = lw * 5.0;
+                double head_half = lw * 3.0;
+
+                // Clamp head to not exceed arrow length
+                if (head_length > length * 0.6) {
+                    head_length = length * 0.6;
+                    head_half = head_length * 0.6;
+                }
 
                 double sin_a = sin(angle);
                 double cos_a = cos(angle);
@@ -82,15 +88,15 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
                 double hx = sin_a * head_half;
                 double hy = cos_a * head_half;
 
-                // Single continuous path: rounded tail -> left shaft -> left wing -> tip -> right wing -> right shaft -> back to tail
-                cairo_move_to(cr, neck_x - sx, neck_y + sy);       // neck left (shaft edge)
-                cairo_line_to(cr, tail_x - sx, tail_y + sy);       // tail left
+                // Single continuous path
+                cairo_move_to(cr, neck_x - sx, neck_y + sy);
+                cairo_line_to(cr, tail_x - sx, tail_y + sy);
                 cairo_arc(cr, tail_x, tail_y, shaft_half,
-                          angle + M_PI/2, angle - M_PI/2);          // rounded tail cap
-                cairo_line_to(cr, neck_x + sx, neck_y - sy);       // neck right (shaft edge)
-                cairo_line_to(cr, neck_x + hx, neck_y - hy);       // right wing
-                cairo_line_to(cr, tip_x, tip_y);                    // tip
-                cairo_line_to(cr, neck_x - hx, neck_y + hy);       // left wing
+                          angle + M_PI/2, angle - M_PI/2);
+                cairo_line_to(cr, neck_x + sx, neck_y - sy);
+                cairo_line_to(cr, neck_x + hx, neck_y - hy);
+                cairo_line_to(cr, tip_x, tip_y);
+                cairo_line_to(cr, neck_x - hx, neck_y + hy);
                 cairo_close_path(cr);
                 cairo_fill(cr);
             }
@@ -196,6 +202,15 @@ void annotation_draw(Annotation* annotation, cairo_t* cr) {
                 for (int i = 1; i < annotation->path.point_count; i++) {
                     cairo_line_to(cr, annotation->path.points[i].x1, annotation->path.points[i].y1);
                 }
+                cairo_stroke(cr);
+            }
+            break;
+
+        case TOOL_LINE:
+            {
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                cairo_move_to(cr, annotation->bounds.x1, annotation->bounds.y1);
+                cairo_line_to(cr, annotation->bounds.x2, annotation->bounds.y2);
                 cairo_stroke(cr);
             }
             break;

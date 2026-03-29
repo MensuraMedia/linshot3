@@ -104,6 +104,16 @@ static void draw_copy(cairo_t* cr, double x, double y) {
     cairo_stroke(cr);
 }
 
+static void draw_line(cairo_t* cr, double x, double y) {
+    double lw = SIDEBAR_ICON_STROKE;
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+
+    cairo_move_to(cr, x+S(4), y+S(16));
+    cairo_line_to(cr, x+S(16), y+S(4));
+    cairo_stroke(cr);
+}
+
 static void draw_select(cairo_t* cr, double x, double y) {
     // Dashed rectangle (marquee selection icon)
     double lw = SIDEBAR_ICON_STROKE;
@@ -188,6 +198,7 @@ static const IconDrawFunc icon_funcs[ICON_COUNT] = {
     draw_box,
     draw_circle,
     draw_text,
+    draw_line,
     draw_select,
     draw_flatten,
     draw_copy,

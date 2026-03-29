@@ -44,7 +44,8 @@ typedef struct {
     bool start_with_os;  // New: Start with OS option
     ShortcutKey shortcut_key;  // New: Shortcut key option
     bool default_screenshot_app;  // Register as default screenshot tool
-    GdkRGBA tool_colors[4];      // Per-tool colors: [0]=arrow, [1]=box, [2]=circle, [3]=text
+    GdkRGBA tool_colors[5];      // Per-tool colors: [0]=arrow, [1]=box, [2]=circle, [3]=text, [4]=line
+    double tool_widths[4];       // Per-tool line widths: [0]=arrow, [1]=box, [2]=circle, [3]=line
     char* text_font_family;      // Text tool font family
     double text_font_size;       // Text tool font size
     bool text_font_bold;         // Text tool bold
@@ -141,8 +142,14 @@ static void load_settings(Settings* settings) {
     settings->text_font_bold = false;
     settings->text_font_italic = false;
 
+    // Default tool line widths
+    settings->tool_widths[0] = 3.0;  // arrow shaft
+    settings->tool_widths[1] = 2.0;  // box
+    settings->tool_widths[2] = 2.0;  // circle
+    settings->tool_widths[3] = 2.0;  // line
+
     // Default tool colors (all red)
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         settings->tool_colors[i].red = 1.0;
         settings->tool_colors[i].green = 0.0;
         settings->tool_colors[i].blue = 0.0;
@@ -182,13 +189,22 @@ static void load_settings(Settings* settings) {
         }
 
         // Load per-tool colors
-        const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text"};
-        for (int i = 0; i < 4; i++) {
+        const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line"};
+        for (int i = 0; i < 5; i++) {
             char* color_str = g_key_file_get_string(key_file, "Settings", color_keys[i], NULL);
             if (color_str) {
                 gdk_rgba_parse(&settings->tool_colors[i], color_str);
                 g_free(color_str);
             }
+        }
+
+        // Load per-tool line widths
+        const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line"};
+        for (int i = 0; i < 4; i++) {
+            GError* werr = NULL;
+            double w = g_key_file_get_double(key_file, "Settings", width_keys[i], &werr);
+            if (!werr && w > 0) settings->tool_widths[i] = w;
+            if (werr) g_error_free(werr);
         }
 
         // Load text font settings
@@ -222,11 +238,17 @@ static void save_settings(Settings* settings) {
     g_key_file_set_boolean(key_file, "Settings", "default_screenshot_app", settings->default_screenshot_app);
 
     // Save per-tool colors
-    const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text"};
-    for (int i = 0; i < 4; i++) {
+    const char* color_keys[] = {"color_arrow", "color_box", "color_circle", "color_text", "color_line"};
+    for (int i = 0; i < 5; i++) {
         char* color_str = gdk_rgba_to_string(&settings->tool_colors[i]);
         g_key_file_set_string(key_file, "Settings", color_keys[i], color_str);
         g_free(color_str);
+    }
+
+    // Save per-tool line widths
+    const char* width_keys[] = {"width_arrow", "width_box", "width_circle", "width_line"};
+    for (int i = 0; i < 4; i++) {
+        g_key_file_set_double(key_file, "Settings", width_keys[i], settings->tool_widths[i]);
     }
 
     // Save text font settings
@@ -646,17 +668,21 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
     if (win_data) {
         win_data->current_tool.type = tool_id;
 
-        // Apply saved color for drawing tools
+        // Apply saved color and width for drawing tools
         if (settings) {
             int color_map = -1;
-            if (tool_id == TOOL_ARROW) color_map = 0;
-            else if (tool_id == TOOL_RECTANGLE) color_map = 1;
-            else if (tool_id == TOOL_ELLIPSE) color_map = 2;
-            else if (tool_id == TOOL_TEXT) color_map = 3;
+            int width_map = -1;
+            if (tool_id == TOOL_ARROW)     { color_map = 0; width_map = 0; }
+            else if (tool_id == TOOL_RECTANGLE) { color_map = 1; width_map = 1; }
+            else if (tool_id == TOOL_ELLIPSE)   { color_map = 2; width_map = 2; }
+            else if (tool_id == TOOL_TEXT)       { color_map = 3; }
+            else if (tool_id == TOOL_LINE)       { color_map = 4; width_map = 3; }
             if (color_map >= 0) {
                 win_data->current_tool.color = settings->tool_colors[color_map];
             }
-            // Apply saved font settings for text tool
+            if (width_map >= 0) {
+                win_data->current_tool.line_width = settings->tool_widths[width_map];
+            }
             if (tool_id == TOOL_TEXT) {
                 g_free(win_data->current_tool.font.family);
                 win_data->current_tool.font.family = g_strdup(settings->text_font_family);
@@ -667,7 +693,7 @@ static void on_tool_button_clicked(GtkWidget* widget, gpointer data) {
         }
 
         const char* tool_names[] = {
-            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select"
+            "None", "Arrow", "Rectangle", "Ellipse", "Text", "Freehand", "Select", "Line"
         };
         char status[50];
         snprintf(status, sizeof(status), "Selected tool: %s", tool_names[tool_id]);
@@ -1895,6 +1921,26 @@ static GtkWidget* create_tool_color_section(const char* tool_name, int tool_colo
     return frame;
 }
 
+static void on_tool_width_changed(GtkWidget* widget, gpointer data) {
+    MainWindow* win = (MainWindow*)data;
+    Settings* settings = safe_get_data(win->window, "settings", "on_tool_width_changed");
+    MainWindowData* win_data = safe_get_data(win->window, "window-data", "on_tool_width_changed");
+    if (!settings) return;
+
+    int width_idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "width-idx"));
+    double val = gtk_spin_button_get_value(GTK_SPIN_BUTTON(widget));
+    settings->tool_widths[width_idx] = val;
+    save_settings(settings);
+
+    // Update active tool if matching
+    if (win_data) {
+        ToolType types[] = {TOOL_ARROW, TOOL_RECTANGLE, TOOL_ELLIPSE, TOOL_LINE};
+        if (win_data->current_tool.type == types[width_idx]) {
+            win_data->current_tool.line_width = val;
+        }
+    }
+}
+
 static void on_text_font_changed(GtkWidget* widget, gpointer data) {
     MainWindow* win = (MainWindow*)data;
     Settings* settings = safe_get_data(win->window, "settings", "on_text_font_changed");
@@ -1939,15 +1985,49 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
 
     GList* alloc_list = NULL;
 
-    // Tool color sections
-    const char* tool_names[] = {"Arrow Color", "Box Color", "Circle Color", "Text Color"};
+    Settings* settings = safe_get_data(win->window, "settings", "create_colors_page");
+
+    // Tools with width + color: Arrow, Box, Circle, Line
+    const char* width_tool_names[] = {"Arrow", "Box", "Circle", "Line"};
+    const int width_color_map[] = {0, 1, 2, 4};  // indices into tool_colors
+    const char* width_labels[] = {"Shaft width:", "Line width:", "Line width:", "Line width:"};
+    double width_max[] = {10.0, 10.0, 10.0, 10.0};
+
     for (int i = 0; i < 4; i++) {
-        GtkWidget* section = create_tool_color_section(tool_names[i], i, win, &alloc_list);
-        gtk_box_pack_start(GTK_BOX(vbox), section, FALSE, FALSE, 0);
+        GtkWidget* frame = gtk_frame_new(width_tool_names[i]);
+        GtkWidget* fbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+        gtk_container_set_border_width(GTK_CONTAINER(fbox), 8);
+        gtk_container_add(GTK_CONTAINER(frame), fbox);
+
+        // Width spinner row
+        GtkWidget* wrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GtkWidget* wlabel = gtk_label_new(width_labels[i]);
+        gtk_widget_set_halign(wlabel, GTK_ALIGN_START);
+        gtk_widget_set_size_request(wlabel, 80, -1);
+        GtkWidget* wspin = gtk_spin_button_new_with_range(1, width_max[i], 0.5);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(wspin), settings ? settings->tool_widths[i] : 2.0);
+        g_object_set_data(G_OBJECT(wspin), "width-idx", GINT_TO_POINTER(i));
+        g_signal_connect(wspin, "value-changed", G_CALLBACK(on_tool_width_changed), win);
+        gtk_box_pack_start(GTK_BOX(wrow), wlabel, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(wrow), wspin, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(fbox), wrow, FALSE, FALSE, 0);
+
+        // Color palette grid
+        GtkWidget* color_section = create_tool_color_section(NULL, width_color_map[i], win, &alloc_list);
+        // Extract the grid from the frame returned by create_tool_color_section and add directly
+        GtkWidget* inner = gtk_bin_get_child(GTK_BIN(color_section));
+        g_object_ref(inner);
+        gtk_container_remove(GTK_CONTAINER(color_section), inner);
+        gtk_box_pack_start(GTK_BOX(fbox), inner, FALSE, FALSE, 0);
+        g_object_unref(inner);
+        gtk_widget_destroy(color_section);
+
+        gtk_box_pack_start(GTK_BOX(vbox), frame, FALSE, FALSE, 0);
     }
 
-    // Text tool additional settings
-    Settings* settings = safe_get_data(win->window, "settings", "create_colors_page");
+    // Text tool section (color only, no width)
+    GtkWidget* text_color_section = create_tool_color_section("Text Color", 3, win, &alloc_list);
+    gtk_box_pack_start(GTK_BOX(vbox), text_color_section, FALSE, FALSE, 0);
 
     GtkWidget* text_frame = gtk_frame_new("Text Settings");
     GtkWidget* text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
@@ -1999,9 +2079,9 @@ static void create_colors_page(MainWindow* win, GtkWidget* notebook) {
 
     // alloc_list is freed when the widget tree is destroyed (small leak, acceptable)
 
-    GtkWidget* colors_tab_label = gtk_label_new("Colors");
-    gtk_widget_set_halign(colors_tab_label, GTK_ALIGN_CENTER);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroll, colors_tab_label);
+    GtkWidget* tools_tab_label = gtk_label_new("Tools");
+    gtk_widget_set_halign(tools_tab_label, GTK_ALIGN_CENTER);
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroll, tools_tab_label);
 }
 
 static void register_shortcut_key(MainWindow* win, ShortcutKey key) {
@@ -2696,24 +2776,23 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
     // Create buttons with icons and labels
     // Icon indices match SidebarIconType enum
     const char* button_labels[] = {
-        "LinShot", "Arrow", "Box", "Circle", "Text", "Select", "Flatten", "Copy", "Save"
+        "LinShot", "Arrow", "Box", "Circle", "Text", "Line", "Select", "Flatten", "Copy", "Save"
     };
-    // Button type: 't'=tool, 'a'=action
-    // For tools, store the ToolType enum value
     typedef struct { char type; int id; } BtnDef;
     BtnDef button_defs[] = {
-        {'a', 0},               // 0: Shot
+        {'a', 0},               // 0: LinShot (capture)
         {'t', TOOL_ARROW},      // 1: Arrow
         {'t', TOOL_RECTANGLE},  // 2: Box
         {'t', TOOL_ELLIPSE},    // 3: Circle
         {'t', TOOL_TEXT},       // 4: Text
-        {'t', TOOL_MARQUEE},    // 5: Select
-        {'a', 1},               // 6: Flatten
-        {'a', 2},               // 7: Copy
-        {'a', 3}                // 8: Save
+        {'t', TOOL_LINE},       // 5: Line
+        {'t', TOOL_MARQUEE},    // 6: Select
+        {'a', 1},               // 7: Flatten
+        {'a', 2},               // 8: Copy
+        {'a', 3}                // 9: Save
     };
 
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 10; i++) {
         GtkWidget* button = gtk_button_new();
         gtk_widget_set_hexpand(button, TRUE);
 
@@ -2746,11 +2825,11 @@ bool main_window_init(MainWindow* win, int argc, char* argv[]) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_tool_button_clicked), win);
         } else if (i == 0) {
             g_signal_connect(button, "clicked", G_CALLBACK(on_capture_button_clicked), win);
-        } else if (i == 6) { // Flatten
+        } else if (i == 7) { // Flatten
             g_signal_connect(button, "clicked", G_CALLBACK(on_flatten_button_clicked), win);
-        } else if (i == 7) { // Copy
+        } else if (i == 8) { // Copy
             g_signal_connect(button, "clicked", G_CALLBACK(on_copy_button_clicked), win);
-        } else if (i == 8) { // Save
+        } else if (i == 9) { // Save
             g_signal_connect(button, "clicked", G_CALLBACK(on_save_button_clicked), win);
         }
 
