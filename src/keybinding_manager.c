@@ -149,6 +149,11 @@ static bool cinnamon_register(KeyBinding key, const char* exec_path) {
     run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys window-screenshot-clip '[]' 2>/dev/null");
     run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]' 2>/dev/null");
 
+    // Restart csd-media-keys so it picks up the new binding immediately
+    // Cinnamon's keybinding daemon caches bindings at startup and does not hot-reload
+    run_cmd("killall csd-media-keys 2>/dev/null");
+    run_cmd("nohup /usr/bin/csd-media-keys > /dev/null 2>&1 &");
+
     return true;
 }
 
