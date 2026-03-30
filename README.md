@@ -5,6 +5,14 @@ LinShot is a modern, open-source screenshot tool built for Linux Debian-based sy
 **Version:** 1.4.0 Beta
 **Created:** January 2025
 
+## Quick Install (One Command)
+
+```bash
+git clone https://github.com/MensuraMedia/linshot3.git && bash linshot3/install.sh
+```
+
+Installs dependencies, builds, and sets up desktop integration. Works on Debian, Ubuntu, Linux Mint, Pop!_OS, and derivatives. See [INSTALL.md](INSTALL.md) for other methods or [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for keybinding notes.
+
 ## Screenshots
 
 ### Sidebar — 16 Tools at a Glance
