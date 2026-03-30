@@ -107,9 +107,19 @@ static bool run_cmd(const char* cmd) {
 // ---------------------------------------------------------------------------
 
 static bool cinnamon_unregister(void) {
-    // Remove LinShot custom keybinding
+    // Remove in-memory keybindings from Cinnamon's keybinding manager
+    run_cmd("dbus-send --session --dest=org.Cinnamon --type=method_call "
+            "/org/Cinnamon org.Cinnamon.Eval "
+            "string:'Main.keybindingManager.remove_custom_keybindings();"
+            " Main.keybindingManager.removeHotKey(\"linshot\");"
+            " Main.keybindingManager.removeHotKey(\"custom0\"); \"ok\";' "
+            "2>/dev/null");
+    // Remove dconf entries
     run_cmd("dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/custom0/");
     run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list '[]'");
+    // Also purge any stale GNOME-path entries (csd-media-keys reads both schemas)
+    run_cmd("dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ 2>/dev/null");
+    run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \"[]\" 2>/dev/null");
     // Restore Cinnamon's built-in screenshot keys
     run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys screenshot");
     run_cmd("gsettings reset org.cinnamon.desktop.keybindings.media-keys area-screenshot");
@@ -120,6 +130,10 @@ static bool cinnamon_unregister(void) {
 
 static bool cinnamon_register(KeyBinding key, const char* exec_path) {
     char cmd[512];
+
+    // Purge any stale GNOME-path entries first (csd-media-keys reads both schemas)
+    run_cmd("dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ 2>/dev/null");
+    run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \"[]\" 2>/dev/null");
 
     // Cinnamon expects custom-list entries as 'customN' (not arbitrary names)
     run_cmd("gsettings set org.cinnamon.desktop.keybindings custom-list \"['custom0']\"");
@@ -150,10 +164,13 @@ static bool cinnamon_register(KeyBinding key, const char* exec_path) {
     run_cmd("gsettings set org.cinnamon.desktop.keybindings.media-keys area-screenshot-clip '[]' 2>/dev/null");
 
     // Force Cinnamon to reload custom keybindings via D-Bus
-    // This is the same method Cinnamon's keyboard settings GUI calls internally
+    // First remove all existing custom keybindings (purges stale in-memory entries),
+    // then re-setup from dconf. This mirrors what Cinnamon's keyboard GUI does.
     run_cmd("dbus-send --session --dest=org.Cinnamon --type=method_call "
             "/org/Cinnamon org.Cinnamon.Eval "
-            "string:'Main.keybindingManager.setup_custom_keybindings(); \"ok\";' "
+            "string:'Main.keybindingManager.remove_custom_keybindings();"
+            " Main.keybindingManager.removeHotKey(\"linshot\");"
+            " Main.keybindingManager.setup_custom_keybindings(); \"ok\";' "
             "2>/dev/null");
 
     return true;
@@ -164,9 +181,9 @@ static bool cinnamon_register(KeyBinding key, const char* exec_path) {
 // ---------------------------------------------------------------------------
 
 static bool gnome_unregister(void) {
-    // Clear the custom keybinding
+    // Clear the custom keybinding list and wipe the entire linshot subtree
     run_cmd("gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \"[]\" 2>/dev/null");
-    run_cmd("dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/binding \"''\" 2>/dev/null");
+    run_cmd("dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/linshot/ 2>/dev/null");
     return true;
 }
 
