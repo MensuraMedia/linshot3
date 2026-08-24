@@ -212,3 +212,75 @@ paste will work.
 
 The equivalent bridge on Wayland is `wl-clipboard` (`wl-paste`). LinShot's capture path is X11-only
 today (see Issue 8 above), so this only becomes relevant once Wayland capture lands.
+
+---
+
+## Clipboard — Deferred Code Issues (Open)
+
+Found while diagnosing the `xclip` issue above. None of these caused that bug, and none are
+fixed yet — they are recorded here for a later pass. All line numbers are against `src/main_window.c`
+as of v1.4.0.
+
+### Issue A: Copy omits floating paste overlays
+
+**Severity:** Medium — Copy silently produces a different image than the canvas shows
+**Location:** `copy_to_clipboard()`, ~line 387
+
+`copy_to_clipboard()` composites the base image and `annotations`, but never walks
+`win_data->paste_overlays`. Both of the other render paths do:
+
+| Path | Draws overlays? |
+|---|---|
+| Canvas draw, ~line 882 | yes |
+| `save_image_with_annotations()`, ~line 2267 | yes |
+| `copy_to_clipboard()` | **no** |
+
+So after one or more `Ctrl+V` pastes, Copy/`Ctrl+C` yields the flat image while Save writes the
+composited one. Flatten first as a workaround.
+
+**Attempted fix, not landed.** Compositing `paste_overlays` into the combined surface — mirroring
+the save path exactly — compiles clean under `-Werror`, but did not change the clipboard output in
+testing: with two overlays visibly rendered on the canvas (confirmed by their dashed borders), the
+copied image was still pixel-identical to the flat base image. Why the block does not take effect
+is unresolved and needs a debugger pass, not more guessing. Note that the first paste lands at
+offset (0,0) with identical content, so any test must use a second offset paste or a different
+source image to be meaningful.
+
+### Issue B: Hand-rolled ARGB→RGBA conversion
+
+**Severity:** Low — latent, not currently reachable
+**Location:** `copy_to_clipboard()`, ~lines 424-441
+
+The manual pixel loop converting Cairo ARGB32 to `GdkPixbuf` RGBA:
+
+- assumes little-endian byte order (`b,g,r,a` in memory); wrong on big-endian
+- never un-premultiplies alpha, which Cairo stores premultiplied and `GdkPixbuf` expects straight
+
+Neither bites today because every capture is fully opaque — measured `min alpha = 255` across a
+live capture, and drawing annotations with `CAIRO_OPERATOR_OVER` onto an opaque base keeps it
+opaque. It becomes a real defect the moment any partially transparent base image reaches this path.
+
+`gdk_pixbuf_get_from_surface()` handles both correctly and is already used by the marquee copy path
+(~line 668) and the save path (~line 2287). Replacing the loop with it verified pixel-identical on
+a live capture round-trip (0 mismatches across 168,734 px), so this part is low-risk.
+
+### Issue C: Redundant full-image pixbuf copy
+
+**Severity:** Low — memory only
+**Location:** `copy_to_clipboard()`, ~line 460
+
+```c
+GdkPixbuf* clipboard_pixbuf = gdk_pixbuf_copy(pixbuf);
+gtk_clipboard_set_image(clipboard, clipboard_pixbuf);
+```
+
+`gtk_clipboard_set_image()` takes its own reference, so the extra `gdk_pixbuf_copy()` is unnecessary
+and roughly doubles peak memory during a copy — about 10 MB extra for a 2565x1046 full-screen
+capture. Passing `pixbuf` directly and unreffing it after is sufficient.
+
+### Also noted
+
+`gtk_clipboard_store()` runs on every copy. It is correct and wanted — it is what makes the image
+survive LinShot exiting — but it forces the clipboard manager to snapshot the image synchronously in
+every advertised format, so it is worth profiling on large captures if the UI ever feels like it
+stalls after a capture.
