@@ -143,3 +143,72 @@ These issues are tracked for resolution in future releases. The Cinnamon path (`
 - Force the DE to reload (not just write to dconf)
 - Clean up fully on unregister (restore defaults)
 - Report errors to the user
+
+---
+
+## Clipboard — Image Not Pastable Into Terminal / Non-GTK Applications
+
+**Filed:** 2026-08-24
+**Status:** Resolved (packaging fix — no application code change)
+**Severity:** High — a core feature appears broken
+**Affects:** Any Debian/Ubuntu/Mint install that does not already have `xclip`
+**Component:** `install.sh`, `debian/control`, `packaging/build-deb.sh`
+
+### Symptom
+
+After a capture, LinShot reports "Image with annotations copied to clipboard" and pasting into
+another GTK application (GIMP, Firefox) works. But pasting into a terminal-based or non-GTK
+consumer — a CLI agent, an Electron app, a terminal emulator's image paste — yields nothing. The
+clipboard looks like it was only partially populated.
+
+### Root cause
+
+**Not a defect in `copy_to_clipboard()`.** LinShot publishes the image correctly:
+
+- `gtk_clipboard_set_image()` takes ownership of the X11 `CLIPBOARD` selection.
+- `gtk_clipboard_store()` hands the payload to the session clipboard manager (`csd-clipboard` on
+  Cinnamon), so the image survives LinShot exiting.
+- GTK advertises the full image target set: `image/png`, `image/bmp`, `image/jpeg`, `image/tiff`,
+  `image/webp`, alongside `TARGETS` / `SAVE_TARGETS` / `MULTIPLE` / `TIMESTAMP`.
+
+The gap is on the **reading** side. GTK applications retrieve the selection through GDK directly.
+Non-GTK consumers almost universally shell out to `xclip` (X11) or `wl-paste` (Wayland) to pull
+`image/png` off the clipboard. Neither ships in a default Debian/Ubuntu/Mint desktop install, and
+LinShot did not declare either — so on a clean system those consumers had no way to read the
+selection, and failed silently.
+
+### Verification
+
+Measured on Linux Mint (Cinnamon, X11) against a live capture:
+
+| Check | Result |
+|---|---|
+| Targets advertised after capture | `image/png`, `image/bmp`, `image/jpeg`, `image/tiff`, `image/webp` |
+| `xclip -selection clipboard -t image/png -o` | valid PNG, 606x306, RGBA |
+| Saved file `LinShot_20260824_155332.png` | 606x306, RGB |
+| Pixel diff, clipboard vs saved file | **0 mismatches across all 185,436 pixels** |
+| Image survives LinShot exiting | yes — clipboard manager retains it |
+
+The clipboard payload is pixel-for-pixel the same screenshot that was written to disk.
+
+### Fix
+
+Declare the clipboard bridge so it is present on every install:
+
+- `install.sh` — added `xclip` to the `apt install` line
+- `debian/control` — `Recommends: xdg-utils, xclip`
+- `packaging/build-deb.sh` — same `Recommends` in the generated control file
+
+### Fix for an existing install
+
+```bash
+sudo apt install xclip
+```
+
+No rebuild needed — this is a runtime dependency, not a code change. Take a new screenshot and the
+paste will work.
+
+### Wayland note
+
+The equivalent bridge on Wayland is `wl-clipboard` (`wl-paste`). LinShot's capture path is X11-only
+today (see Issue 8 above), so this only becomes relevant once Wayland capture lands.

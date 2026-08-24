@@ -100,7 +100,7 @@ For developers or users who want to customize before building.
 **Debian / Ubuntu / Linux Mint:**
 ```bash
 sudo apt update
-sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev
+sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev xclip
 ```
 
 **Verify dependencies are installed:**
@@ -138,6 +138,16 @@ The binary is self-contained — it only needs the `resources/` folder in the sa
 | `cmake: command not found` | CMake not installed | `sudo apt install cmake` |
 | `cc: command not found` | No C compiler | `sudo apt install build-essential` |
 | Warnings treated as errors | Expected — strict mode | All warnings must be fixed before merge |
+
+### Runtime Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Screenshot pastes into GIMP/Firefox but not into a terminal, CLI tool, or Electron app | `xclip` missing — non-GTK apps read the X11 clipboard through it | `sudo apt install xclip` |
+
+`xclip` is the bridge non-GTK programs use to read `image/png` off the X11 clipboard. LinShot
+publishes the image correctly without it, but those consumers cannot see it. See
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the full write-up.
 
 ---
 
@@ -189,7 +199,7 @@ Run LinShot directly from the source tree without installing anything system-wid
 
 ```bash
 # Install dependencies (one-time, requires sudo)
-sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev
+sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev xclip
 
 # Clone and build
 git clone https://github.com/MensuraMedia/linshot3.git

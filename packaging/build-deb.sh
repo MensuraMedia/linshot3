@@ -65,7 +65,7 @@ Section: graphics
 Priority: optional
 Architecture: ${ARCH}
 Depends: ${DEPENDS}
-Recommends: xdg-utils
+Recommends: xdg-utils, xclip
 Installed-Size: ${INSTALLED_SIZE}
 Maintainer: MensuraMedia <mensuramedia@gmail.com>
 Homepage: https://github.com/MensuraMedia/linshot

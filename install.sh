@@ -28,7 +28,7 @@ APP_DIR="$HOME/.local/share/applications"
 
 echo "[1/5] Installing build dependencies..."
 sudo apt update -qq
-sudo apt install -y -qq cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev git >/dev/null 2>&1
+sudo apt install -y -qq cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev git xclip >/dev/null 2>&1
 echo "      Done."
 
 echo "[2/5] Downloading LinShot..."

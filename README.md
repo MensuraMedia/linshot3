@@ -124,7 +124,7 @@ Displays LinShot version, project description, and key details: creation date (J
 
 ```bash
 # Install dependencies (Debian/Ubuntu/Mint)
-sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev
+sudo apt install cmake build-essential libgtk-3-dev libx11-dev libcairo2-dev xclip
 
 # Build
 git clone https://github.com/MensuraMedia/linshot3.git
